@@ -697,39 +697,63 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
   async getControlEvidence(controlSysId: string): Promise<TestEvidence> {
     if (this.useLive) {
       try {
-        // 1. Fetch control tests (sn_audit_control_test linked via control field)
+        // 1. Fetch all control tests (1 query)
         const tests = await this.queryTable<any>('sn_audit_control_test', {
           sysparm_query: `control=${controlSysId}`,
           sysparm_fields: 'sys_id,number,short_description,name,state,control_effectiveness,status'
         });
-        
+
+        const testIds = tests.map(t => getValue(t.sys_id)).filter(Boolean);
+
+        // 2. BATCH fetch all results for all tests (1 query instead of N)
+        let allResults: any[] = [];
+        if (testIds.length > 0) {
+          allResults = await this.queryTable<any>('sn_audit_test_result', {
+            sysparm_query: `u_control_testIN${testIds.join(',')}`,
+            sysparm_fields: 'sys_id,u_control_test,u_test_result,u_testing_date'
+          });
+        }
+
+        // 3. BATCH fetch all issues for all tests (1 query instead of N)
+        let allTestIssues: any[] = [];
+        if (testIds.length > 0) {
+          allTestIssues = await this.queryTable<any>('sn_grc_issue', {
+            sysparm_query: `parentIN${testIds.join(',')}`,
+            sysparm_fields: 'sys_id,number,short_description,state,parent'
+          });
+        }
+
+        // 4. Build results in-memory (no more queries)
+        const resultsMap = new Map<string, any>();
+        allResults.forEach(r => {
+          resultsMap.set(getValue(r.u_control_test), r);
+        });
+
+        const issuesMap = new Map<string, any[]>();
+        allTestIssues.forEach(iss => {
+          const parentId = getValue(iss.parent);
+          if (!issuesMap.has(parentId)) issuesMap.set(parentId, []);
+          issuesMap.get(parentId)!.push(iss);
+        });
+
+        // 5. Construct evidence objects with pre-fetched data
         const evidenceTests: any[] = [];
         for (const test of tests) {
           const testId = getValue(test.sys_id);
-          const results = await this.queryTable<any>('sn_audit_test_result', {
-            sysparm_query: `u_control_test=${testId}`,
-            sysparm_fields: 'sys_id,u_control_test,u_test_result,u_testing_date'
-          });
-          const resultRec = results[0];
-          
-          // Issues linked to the test (via parent field)
-          const testIssues = await this.queryTable<any>('sn_grc_issue', {
-            sysparm_query: `parent=${testId}`,
-            sysparm_fields: 'sys_id,number,short_description,state'
-          });
-          
-          // An issue is open unless it is in state '3' (Closed Complete)
+          const resultRec = resultsMap.get(testId);
+          const testIssues = issuesMap.get(testId) || [];
+
           const openIssues: Issue[] = testIssues
-             .filter(iss => getValue(iss.state) !== '3')
-             .map(iss => ({
-               sysId: getValue(iss.sys_id),
-               number: getDisplayValue(iss.number),
-               desc: getDisplayValue(iss.short_description),
-               state: getValue(iss.state)
-             }));
-             
+            .filter(iss => getValue(iss.state) !== '3')
+            .map(iss => ({
+              sysId: getValue(iss.sys_id),
+              number: getDisplayValue(iss.number),
+              desc: getDisplayValue(iss.short_description),
+              state: getValue(iss.state)
+            }));
+
           const closedIssuesCount = testIssues.filter(iss => getValue(iss.state) === '3').length;
-          
+
           evidenceTests.push({
             sysId: testId,
             number: getDisplayValue(test.number),
@@ -744,8 +768,7 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
           });
         }
 
-        // 2. Fetch issues directly linked to this control record
-        // sn_compliance_control extends sn_grc_item: issues use item=controlSysId
+        // 6. Fetch issues directly linked to this control record
         const directControlIssues = await this.queryTable<any>('sn_grc_issue', {
           sysparm_query: `item=${controlSysId}`,
           sysparm_fields: 'sys_id,number,short_description,state'
@@ -759,13 +782,14 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
             state: getValue(iss.state)
           }));
         const directClosedCount = directControlIssues.filter(iss => getValue(iss.state) === '3').length;
-        
+
+        // 7. Fetch control metadata
         const controls = await this.queryTable<any>('sn_compliance_control', {
           sysparm_query: `sys_id=${controlSysId}`,
           sysparm_fields: 'sys_id,name,active,description'
         });
         const ctrl = controls[0];
-        
+
         return {
           sysId: controlSysId,
           number: 'CTRL_' + controlSysId.split('_')[1] || 'CTRL',

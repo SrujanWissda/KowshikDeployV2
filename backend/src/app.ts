@@ -63,6 +63,24 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// ============================================================================
+// LOUD inbound request logger — especially valuable when ServiceNow Script Includes
+// hit the wrong endpoint or method (HTTP 405 is #1 cause of "button does
+// nothing" failures). Logs EVERY /api/* call *before* any other middleware so
+// we can see a 405/404 even if isolation or routing rejects it.
+// ============================================================================
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/')) {
+    console.log(
+      `[INBOUND] ${req.method} ${req.path} ` +
+      `| Content-Type: ${req.get('Content-Type') || '(none)'} ` +
+      `| Content-Length: ${req.get('Content-Length') || '0'} ` +
+      `| Origin: ${req.get('Origin') || '(none'}`
+    );
+  }
+  next();
+});
+
 // Disable caching for all API requests to ensure fresh filtered data
 app.use((req, res, next) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
@@ -734,6 +752,76 @@ app.get('/api/debug/salesforce/describe/:objectName', async (req, res) => {
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ============================================================================
+// Catch-all handler for unmatched API requests. Explains *exactly* what went
+// wrong so when a ServiceNow Script Include calls the wrong method/path, the
+// error message (and server log) is actionable instead of a mysterious 404.
+// ============================================================================
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) {
+    return next();
+  }
+
+  // Compute which methods ARE available for this path.
+  // Exact matches first, then parameterized patterns that Express normally
+  // handles automatically (e.g. /api/platforms/servicenow/risks matches the
+  // pattern /api/platforms/:platformName/risks).
+  const methodTable: Record<string, string[]> = {
+    '/api/instances': ['GET'],
+    '/api/platforms': ['GET'],
+    '/api/run-agent': ['POST'],
+    '/api/observability/traces': ['GET'],
+    '/api/observability/stats': ['GET'],
+    '/api/health/integrity-scan': ['GET'],
+    '/api/platforms/servicenow/risks': ['GET'],
+    '/api/platforms/servicenow/assessments': ['GET'],
+    '/api/platforms/salesforce/risks': ['GET'],
+    '/api/platforms/salesforce/assessments': ['GET'],
+    '/api/schema-discovery': ['POST'],
+    '/api/schema-discovery/live': ['POST'],
+    '/api/schema-discovery/candidates': ['GET'],
+    '/api/platforms/discovered': ['GET'],
+  };
+  const parameterPatterns: { pattern: RegExp; methods: string[] }[] = [
+    { pattern: /^\/api\/platforms\/[^\/]+\/risks$/, methods: ['GET'] },
+    { pattern: /^\/api\/platforms\/[^\/]+\/assessments$/, methods: ['GET'] },
+    { pattern: /^\/api\/debug\/salesforce\/describe\/[^\/]+$/, methods: ['GET'] }
+  ];
+
+  let allowed = methodTable[req.path];
+  if (!allowed) {
+    const hit = parameterPatterns.find(p => p.pattern.test(req.path));
+    if (hit) allowed = hit.methods;
+  }
+
+  if (allowed && !allowed.includes(req.method)) {
+    // ---- 405 METHOD NOT ALLOWED -----------------------------------------
+    console.warn(
+      `[405] ${req.method} ${req.path} — allowed methods: ${allowed.join(', ')}`
+    );
+    res.set('Allow', allowed.join(', '));
+    return res.status(405).json({
+      success: false,
+      error: `HTTP 405: Method '${req.method}' not allowed on '${req.path}'. Allowed: ${allowed.join(', ')}`,
+      troubleshooting: [
+        `If you are calling from a ServiceNow Script Include:`,
+        `  → /api/run-agent requires POST (not GET), setHttpMethod('POST')`,
+        `  → All GET endpoints require: ?instanceId=instance_001 (or instance_002)`,
+        `  → All POST bodies require JSON key "instanceId": "instance_001"`,
+        `  → Always set Content-Type: application/json via setRequestHeader('Content-Type','application/json')`
+      ].join('\n')
+    });
+  }
+
+  // ---- 404 PATH NOT FOUND --------------------------------------------
+  console.warn(`[404] ${req.method} ${req.path} — no route matches`);
+  return res.status(404).json({
+    success: false,
+    error: `HTTP 404: No route '${req.method} ${req.path}' exists on this server.`,
+    availableEndpoints: methodTable
+  });
 });
 
 export default app;
