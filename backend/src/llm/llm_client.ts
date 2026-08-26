@@ -149,13 +149,28 @@ export class GeminiLLMClient extends BaseLLMClient {
     const functionDeclarations = tools.map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
 
     for (let turn = 1; turn <= maxTurns; turn++) {
+      const isFinalTurn = turn === maxTurns;
       let data: any;
       try {
         const response = await axios.post(url, {
           contents,
           system_instruction: { parts: [{ text: systemInstruction }] },
           tools: [{ functionDeclarations }],
-          generation_config: { temperature: 0.1, max_output_tokens: parseInt(process.env.GEMINI_TOOL_MAX_TOKENS || '4096', 10) }
+          // ✅ FINAL TURN: use response_schema to FORCE the final answer tool shape
+          //    — the model literally cannot respond in any other shape; this
+          //    eliminates "max turns exceeded" when the model just won't stop
+          //    chatting. The response_schema matches the finalAnswerTool's args
+          //    so the returned object has the same shape as a function-call return.
+          ...(isFinalTurn ? {
+            generation_config: {
+              temperature: 0.1,
+              max_output_tokens: parseInt(process.env.GEMINI_TOOL_MAX_TOKENS || '4096', 10),
+              response_mime_type: 'application/json',
+              response_schema: functionDeclarations.find((f: any) => f.name === finalAnswerTool)?.parameters
+            }
+          } : {
+            generation_config: { temperature: 0.1, max_output_tokens: parseInt(process.env.GEMINI_TOOL_MAX_TOKENS || '4096', 10) }
+          })
         }, {
           headers: { 'Content-Type': 'application/json' },
           timeout: parseInt(process.env.GEMINI_TIMEOUT_MS || '90000', 10)
@@ -169,23 +184,61 @@ export class GeminiLLMClient extends BaseLLMClient {
 
       const parts: any[] = data?.candidates?.[0]?.content?.parts || [];
       if (parts.length === 0) {
-        // Gemini occasionally returns an empty response (no text, no tool calls).
-        // Nudge the conversation with a retry prompt rather than failing outright.
         const finishReason = data?.candidates?.[0]?.finishReason || 'UNKNOWN';
-        console.warn(`[GeminiLLMClient] Empty parts on turn ${turn} (finishReason=${finishReason}). Nudging model to retry.`);
-        if (turn < maxTurns) {
-          contents.push({ role: 'user', parts: [{ text: `Your last response was empty. Please use one of the available tools to continue investigating, or call ${finalAnswerTool} if you have enough evidence.` }] });
-          continue;
+        console.warn(`[GeminiLLMClient] Empty parts on turn ${turn} (finishReason=${finishReason}).`);
+        if (isFinalTurn) {
+          // Out of turns AND empty — nothing left to try.
+          recordSpan('llm.tool_loop', t0, 'error', { model: this.model, turn, reason: 'empty candidate on final turn' });
+          return null;
         }
-        recordSpan('llm.tool_loop', t0, 'error', { model: this.model, turn, reason: 'empty candidate after retry' });
+        contents.push({ role: 'user', parts: [{ text: `Your last response was empty. Please use one of the available tools to continue investigating, or call ${finalAnswerTool} if you have enough evidence.` }] });
+        continue;
+      }
+
+      // ✅ FINAL TURN: try to interpret the response as the final answer.
+      //    If the model called finalAnswerTool via function call, we handle it
+      //    in the normal "calls.length > 0" branch below. But if it answered
+      //    via the forced JSON schema (text part with valid JSON), parse it
+      //    and return it as the result — no more max-turn failures.
+      if (isFinalTurn) {
+        const calls = parts.filter(p => p.functionCall).map(p => p.functionCall);
+        const finalCall = calls.find(c => c.name === finalAnswerTool);
+        if (finalCall) {
+          recordSpan('llm.tool_loop', t0, 'ok', {
+            model: this.model,
+            turns: turn,
+            toolCalls: toolCallLog.map(c => c.name).join(', ') || '(none — finalized on last turn via function call)',
+            finalArgs: capText(JSON.stringify(finalCall.args))
+          });
+          return { result: finalCall.args as T, toolCallLog, turns: turn };
+        }
+        // No function call — extract text and parse as JSON (the schema-forced path)
+        const textParts = parts.filter(p => typeof p.text === 'string').map(p => p.text);
+        const combinedText = textParts.join('\n').trim();
+        if (combinedText) {
+          try {
+            const parsed = JSON.parse(combinedText);
+            console.warn(`[GeminiLLMClient] Final turn recovered via forced JSON schema (not via ${finalAnswerTool} function call).`);
+            recordSpan('llm.tool_loop', t0, 'ok', {
+              model: this.model,
+              turns: turn,
+              toolCalls: toolCallLog.map(c => c.name).join(', ') || '(none — recovered via schema)',
+              finalArgs: capText(JSON.stringify(parsed)),
+              recovered: 'schema-force'
+            });
+            return { result: parsed as T, toolCallLog, turns: turn };
+          } catch (_parseErr) {
+            console.warn(`[GeminiLLMClient] Final turn text was not valid JSON: ${combinedText.slice(0, 200)}`);
+          }
+        }
+        recordSpan('llm.tool_loop', t0, 'error', { model: this.model, turn, reason: 'final turn could not extract final answer', toolCalls: toolCallLog.map(c => c.name).join(', ') });
         return null;
       }
 
       const calls = parts.filter(p => p.functionCall).map(p => p.functionCall);
 
       if (calls.length === 0) {
-        // Model narrated in plain text instead of calling a tool — nudge it back
-        // toward acting rather than failing the whole assessment outright.
+        // Model narrated in plain text instead of calling a tool — nudge it back.
         contents.push({ role: 'model', parts });
         contents.push({ role: 'user', parts: [{ text: `Use one of the available tools to continue investigating, or call ${finalAnswerTool} once you have enough evidence to finalize.` }] });
         continue;
@@ -217,6 +270,7 @@ export class GeminiLLMClient extends BaseLLMClient {
       contents.push({ role: 'user', parts: functionResponseParts });
     }
 
+    // Should be unreachable (final turn handler returns above) — kept as a safety net
     recordSpan('llm.tool_loop', t0, 'error', { model: this.model, reason: 'max turns exceeded without finalizing', toolCalls: toolCallLog.map(c => c.name).join(', ') });
     return null;
   }

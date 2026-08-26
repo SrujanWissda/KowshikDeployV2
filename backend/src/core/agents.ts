@@ -767,6 +767,39 @@ export class ControlEffectivenessAgent {
     const choiceStr = Object.keys(factorDetails.choiceMap).join(', ');
     const entityLabel = this.adapter.getEntityLabel();
 
+    // ========================================================================
+    // ✅ FAST-TRACK SHORTCUT: If there's ZERO evidence (no tests, no open
+    //    issues, no prior closed assessment) we already know the methodology
+    //    says "pick the WEAKEST valid rating" — skip the tool loop entirely.
+    //    This is the #1 fix for "tool loop did not finalize" because when
+    //    all tool results come back empty, the model tends to re-nudge itself
+    //    in circles until it burns through maxTurns=6 without submitting.
+    // ========================================================================
+    const noTests      = !item.evidence.tests || item.evidence.tests.length === 0;
+    const noOpenIssues = !item.evidence.openIssues || item.evidence.openIssues.length === 0;
+    const noPrior      = !priorInstanceSysId;
+    if (noTests && noOpenIssues && noPrior) {
+      // Find the WEAKEST rating in the factor's choice map = numerically lowest entry
+      const entries = Object.entries(factorDetails.choiceMap);
+      let weakestLabel = entries[0][0];
+      let weakestScore = entries[0][1];
+      for (const [label, score] of entries) {
+        if (score < weakestScore) { weakestLabel = label; weakestScore = score; }
+      }
+      const justification = 'There is no recorded test evidence or prior assessment for this control, which requires a rating of ' + weakestLabel + ' according to the assessment methodology.';
+      tracer.log('FAST_TRACK', {
+        control: item.controlName,
+        rating: weakestLabel,
+        reason: 'no tests + no issues + no prior = immediately apply weakest rating'
+      });
+      return {
+        rating: weakestLabel,
+        score: weakestScore,
+        justification,
+        toolCallLog: [{ name: 'fast_track_no_evidence', args: { rating: weakestLabel } }]
+      };
+    }
+
     const tools: ToolDeclaration[] = [
       {
         name: 'get_control_details',
