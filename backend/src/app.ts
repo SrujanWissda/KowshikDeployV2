@@ -380,6 +380,23 @@ app.post('/api/run-agent', async (req, res) => {
   } catch (error: any) {
     console.log = originalLog;
 
+    // ✅ CRITICAL DEBUG FIX: Log the ACTUAL error (not just sanitized message)
+    //    so Vercel function logs show the real root cause — stack trace + all.
+    //    Without this, we only see "[ISOLATION] Instance 'X' agent execution failed"
+    //    and have zero visibility into what actually broke.
+    console.error(
+      `\n` +
+      `================================================================================\n` +
+      `  ❌ AGENT EXECUTION FAILED [Instance: '${instanceId}'] [Agent: '${agent}'] [Platform: '${platform}']\n` +
+      `  Target ID: ${targetId}\n` +
+      `  Error: ${error?.message || 'Unknown error'}\n` +
+      `================================================================================\n`
+    );
+    if (error?.stack) {
+      console.error(error.stack);
+    }
+    console.error(error);
+
     // ✅ DIAGNOSTICS: Expose adapter mode even on error paths
     const adapterDiagnostics = adapter && typeof adapter.getAdapterDiagnostics === 'function'
       ? adapter.getAdapterDiagnostics()
@@ -389,7 +406,7 @@ app.post('/api/run-agent', async (req, res) => {
     const errorMsg = error?.message || 'Unknown error occurred';
     const sanitizedError = errorMsg.includes('[ISOLATION]')
       ? errorMsg
-      : `[ISOLATION] Instance '${instanceId}' agent execution failed`;
+      : `[ISOLATION] Instance '${instanceId}' agent execution failed: ${errorMsg}`;
 
     res.status(500).json({
       success: false,

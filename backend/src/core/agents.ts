@@ -34,11 +34,26 @@ function buildEvidenceFingerprint(evidence: TestEvidence): string {
 }
 
 // Helper: run asynchronous task on items in parallel batches with a concurrency limit
-async function runInParallelBatches<T, R>(items: T[], batchSize: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = [];
+// ✅ CRITICAL FIX: Each item is individually wrapped in try/catch so a single
+//    item failure (thrown error) never kills the entire batch. Promise.all
+//    would otherwise fail-fast on the first rejection and abandon every other
+//    item in the batch — confirmed live as the root cause of "agent 500s"
+//    when only one control out of 20+ had a transient Gemini/network hiccup.
+type BatchErrorResult<T> = { readonly success: false; error: string; item: T };
+async function runInParallelBatches<T, R>(items: T[], batchSize: number, fn: (item: T) => Promise<R>): Promise<(R | BatchErrorResult<T>)[]> {
+  const results: (R | BatchErrorResult<T>)[] = [];
   for (let i = 0; i < items.length; i += batchSize) {
     const batch = items.slice(i, i + batchSize);
-    const batchResults = await Promise.all(batch.map(item => fn(item)));
+    const batchResults = await Promise.all(
+      batch.map(async (item): Promise<R | BatchErrorResult<T>> => {
+        try {
+          return await fn(item);
+        } catch (e: any) {
+          console.warn(`[runInParallelBatches] Single item failed (batch continuing): ${e.message}`);
+          return { success: false as const, error: e.message || 'Unknown per-item error', item };
+        }
+      })
+    );
     results.push(...batchResults);
   }
   return results;
@@ -46,12 +61,22 @@ async function runInParallelBatches<T, R>(items: T[], batchSize: number, fn: (it
 
 // Helper: retry a tool-calling loop before giving up. A transient Gemini/network
 // hiccup on one attempt no longer means the item falls straight to a "please
-// retry" placeholder — it gets one more full attempt first. Only retries on a
-// null result (loop didn't finalize); never re-runs a successful attempt.
+// retry" placeholder — it gets one more full attempt first.
+// ✅ FIX: Retries on BOTH null results AND thrown exceptions — transient errors
+//    like Gemini timeouts or 5xx responses throw, not just return null.
 async function withRetry<T>(fn: () => Promise<T | null>, attempts: number): Promise<T | null> {
+  let lastError: any = null;
   for (let i = 0; i < attempts; i++) {
-    const result = await fn();
-    if (result) return result;
+    try {
+      const result = await fn();
+      if (result) return result;
+    } catch (e: any) {
+      lastError = e;
+      console.warn(`[withRetry] Attempt ${i + 1}/${attempts} threw: ${e.message}${i < attempts - 1 ? ' — retrying' : ''}`);
+    }
+  }
+  if (lastError) {
+    console.error(`[withRetry] All ${attempts} attempts failed. Last error: ${lastError.message}`);
   }
   return null;
 }
@@ -285,15 +310,26 @@ export class ControlEffectivenessAgent {
       });
 
       for (const r of batchResults) {
-        if (!r.success) {
-          if (r.error === 'tool loop did not finalize') {
-            results.push({ control: r.item.controlName, action: 'failed', error: 'tool loop did not finalize' });
-          }
+        const rAny = r as any;
+        // ✅ Handle BOTH shapes:
+        //    1. Our callback shape: { success: boolean, item, error?, draftResult? }
+        //    2. runInParallelBatches error wrapper shape: { success: false, error, item }
+        if (!rAny.success) {
+          const ctrlName = rAny.item?.controlName || '(unknown control)';
+          const errMsg = rAny.error || 'Unknown per-item batch error';
+          console.warn(`[ControlEffectivenessAgent] Skipping control '${ctrlName}': ${errMsg}`);
+          try {
+            if (rAny.item?.rowSysId) {
+              await this.adapter.writeFailure(rAny.item.rowSysId, errMsg);
+            }
+          } catch (_) { /* writeFailure is best-effort */ }
+          results.push({ control: ctrlName, action: 'failed', error: errMsg });
+          tracer.log('ERROR', { control: ctrlName, error: errMsg });
           continue;
         }
-        const draftResult = r.draftResult!;
-        drafts.push({ item: r.item, ...draftResult });
-        tracer.log('RESULT', { control: r.item.controlName, rating: draftResult.rating, score: draftResult.score, justification: draftResult.justification });
+        const draftResult = rAny.draftResult!;
+        drafts.push({ item: rAny.item, ...draftResult });
+        tracer.log('RESULT', { control: rAny.item.controlName, rating: draftResult.rating, score: draftResult.score, justification: draftResult.justification });
       }
 
       // ── Pass 2: self-critique — a second, independent reviewer pass over the
@@ -308,12 +344,24 @@ export class ControlEffectivenessAgent {
         for (let i = 0; i < drafts.length; i += critiqueChunkSize) {
           critiqueChunks.push(drafts.slice(i, i + critiqueChunkSize));
         }
-        // Each chunk reviews a disjoint slice of drafts and mutates only its own
-        // items in place — safe to run concurrently instead of one chunk at a time.
-        await Promise.all(critiqueChunks.map(chunk => this.critiqueDrafts(chunk, tracer)));
+        // ✅ FIX: Wrap each chunk in try/catch — a failed critique chunk must
+        //    never block the others; the first-pass results are still perfectly valid.
+        await Promise.all(
+          critiqueChunks.map(async (chunk) => {
+            try {
+              await this.critiqueDrafts(chunk, tracer);
+            } catch (e: any) {
+              console.warn(`[ControlEffectivenessAgent] Critique chunk failed (continuing without it): ${e.message}`);
+            }
+          })
+        );
       }
 
+      // ✅ FIX: Each write-back is individually try/catch-wrapped so a write
+      //    failure on one control never prevents the remaining controls from
+      //    being written. Promise.allSettled-like behavior, but inline.
       await Promise.all(drafts.map(async (draft) => {
+        try {
         const item = draft.item;
         const controlLevelIssues: any[] = item.evidence.openIssues || [];
         const tests: any[] = (item.evidence as any).tests || [];
@@ -409,6 +457,17 @@ export class ControlEffectivenessAgent {
         );
 
         results.push({ control: item.controlName, action: 'assessed', rating: draft.rating, justification: draft.justification, verified });
+        } catch (e: any) {
+          const ctrlName = draft.item?.controlName || '(unknown control)';
+          console.warn(`[ControlEffectivenessAgent] Write-back failed for control '${ctrlName}': ${e.message}`);
+          try {
+            if (draft.item?.rowSysId) {
+              await this.adapter.writeFailure(draft.item.rowSysId, `Write-back failed: ${e.message || 'Unknown error'}`);
+            }
+          } catch (_) { /* best-effort */ }
+          results.push({ control: ctrlName, action: 'failed', error: `Write-back: ${e.message}` });
+          tracer.log('ERROR', { control: ctrlName, error: `Write-back: ${e.message}` });
+        }
       }));
     }
 
@@ -418,9 +477,15 @@ export class ControlEffectivenessAgent {
     // module has inherent_justification / control_justification / residual_justification
     // fields on the assessment instance itself). Most platforms don't model this at all,
     // so this step is silently skipped there rather than treated as an error.
+    // ✅ FIX: Whole synthesis is best-effort — never let a narrative-writing error
+    //    discard the per-control assessments that are already written and verified.
     const getContext = (this.adapter as any).getInstanceJustificationContext;
     if (typeof getContext === 'function') {
-      await this.synthesizeInstanceJustifications(inst.sysId, results, getContext, tracer);
+      try {
+        await this.synthesizeInstanceJustifications(inst.sysId, results, getContext, tracer);
+      } catch (e: any) {
+        console.warn(`[ControlEffectivenessAgent] Instance synthesis skipped due to error: ${e.message}`);
+      }
     }
 
     // ── Observability: write a trace record to u_ema_audit_trail if adapter supports it ──
@@ -1022,13 +1087,23 @@ export class InherentAssessmentAgent {
     });
 
     for (const r of batchResults) {
-      if (!r.success) {
-        results.push({ factor: r.factor.factorName, rating: null, error: r.error });
+      const rAny = r as any;
+      if (!rAny.success) {
+        const factorName = rAny.factor?.factorName || '(unknown factor)';
+        const errMsg = rAny.error || 'Unknown per-item batch error';
+        console.warn(`[InherentAssessmentAgent] Skipping factor '${factorName}': ${errMsg}`);
+        try {
+          if (rAny.factor?.sysId) {
+            await this.adapter.writeFailure(rAny.factor.sysId, errMsg);
+          }
+        } catch (_) { /* best-effort */ }
+        results.push({ factor: factorName, rating: null, error: errMsg });
+        tracer.log('ERROR', { factor: factorName, error: errMsg });
         continue;
       }
-      const draftResult = r.draftResult!;
-      drafts.push({ factor: r.factor, ...draftResult });
-      tracer.log('RESULT', { factor: r.factor.factorName, rating: draftResult.rating, score: draftResult.score, justification: draftResult.justification });
+      const draftResult = rAny.draftResult!;
+      drafts.push({ factor: rAny.factor, ...draftResult });
+      tracer.log('RESULT', { factor: rAny.factor.factorName, rating: draftResult.rating, score: draftResult.score, justification: draftResult.justification });
     }
 
     // ── Pass 2: self-critique — a second, independent reviewer pass, same pattern
@@ -1040,11 +1115,24 @@ export class InherentAssessmentAgent {
       for (let i = 0; i < drafts.length; i += critiqueChunkSize) {
         critiqueChunks.push(drafts.slice(i, i + critiqueChunkSize));
       }
-      await Promise.all(critiqueChunks.map(chunk => this.critiqueFactorDrafts(chunk, tracer)));
+      // ✅ FIX: Wrap each critique chunk in try/catch so one failing chunk
+      //    never prevents the others from running.
+      await Promise.all(
+        critiqueChunks.map(async (chunk) => {
+          try {
+            await this.critiqueFactorDrafts(chunk, tracer);
+          } catch (e: any) {
+            console.warn(`[InherentAssessmentAgent] Critique chunk failed (continuing): ${e.message}`);
+          }
+        })
+      );
     }
 
     // ── Finalize: write each factor's response ──
+    // ✅ FIX: Each write is independently try/catch-wrapped so one failure
+    //    never aborts the rest of the responses.
     await Promise.all(drafts.map(async (draft) => {
+      try {
       const factor = draft.factor;
       const formattedDate = new Date().toISOString().replace('T', ' ').substring(0, 19);
       const issueCount = entityIssues.length;
@@ -1119,6 +1207,17 @@ export class InherentAssessmentAgent {
         )
       );
       results.push({ factor: factor.factorName, rating: draft.rating, score: draft.score, justification: draft.justification, verified });
+      } catch (e: any) {
+        const factorName = draft.factor?.factorName || '(unknown factor)';
+        console.warn(`[InherentAssessmentAgent] Write-back failed for factor '${factorName}': ${e.message}`);
+        try {
+          if (draft.factor?.sysId) {
+            await this.adapter.writeFailure(draft.factor.sysId, `Write-back failed: ${e.message || 'Unknown error'}`);
+          }
+        } catch (_) { /* best-effort */ }
+        results.push({ factor: factorName, rating: null, error: `Write-back: ${e.message}` });
+        tracer.log('ERROR', { factor: factorName, error: `Write-back: ${e.message}` });
+      }
     }));
 
     // ── Instance-level narrative synthesis (inherent_justification) — duck-typed,
@@ -1126,23 +1225,33 @@ export class InherentAssessmentAgent {
     // getInstanceJustificationContext (already built for the residual work) purely to
     // read the platform's own calculated inherent rating as an anchor, the same way
     // the reference script treats it as authoritative. ──
+    // ✅ FIX: Synthesis is best-effort — never kill the whole run for a narrative error.
     const rawWriteInherentSummary = (this.adapter as any).writeInherentJustificationSummary;
     if (typeof rawWriteInherentSummary === 'function') {
-      // Bind here, not just extract — this is called later as a detached function
-      // reference inside synthesizeInherentJustification, and plain (obj as any).method
-      // access only preserves `this` when invoked immediately as obj.method(...); once
-      // stored in a variable and called standalone, `this` inside the adapter method
-      // would otherwise be undefined.
-      await this.synthesizeInherentJustification(inst.sysId, results, rawWriteInherentSummary.bind(this.adapter), tracer);
+      try {
+        // Bind here, not just extract — this is called later as a detached function
+        // reference inside synthesizeInherentJustification, and plain (obj as any).method
+        // access only preserves `this` when invoked immediately as obj.method(...); once
+        // stored in a variable and called standalone, `this` inside the adapter method
+        // would otherwise be undefined.
+        await this.synthesizeInherentJustification(inst.sysId, results, rawWriteInherentSummary.bind(this.adapter), tracer);
+      } catch (e: any) {
+        console.warn(`[InherentAssessmentAgent] Inherent synthesis skipped due to error: ${e.message}`);
+      }
     }
 
     // Optional platform-specific finalization step (e.g. Salesforce Risk
     // package Band/rollup enrichment) — not part of BaseGRCAdapter since
     // it's a concept only some adapters implement; duck-typed so
     // ServiceNow/hand-written Salesforce adapters are unaffected.
+    // ✅ FIX: Finalization is best-effort — never discard already-written data over it.
     const finalize = (this.adapter as any).finalizeInherentAssessment;
     if (typeof finalize === 'function') {
-      await finalize.call(this.adapter, inst.sysId);
+      try {
+        await finalize.call(this.adapter, inst.sysId);
+      } catch (e: any) {
+        console.warn(`[InherentAssessmentAgent] Finalize step skipped due to error: ${e.message}`);
+      }
     }
 
     // ── Observability: write a trace record to u_ema_audit_trail if adapter supports it ──
@@ -1874,10 +1983,17 @@ export class RiskControlMappingAgent {
     let allRejected: ResolvedControl[] = [];
     let chunksOk = 0;
     for (const res of batchResults) {
-      if (!res) continue;
+      const resAny = res as any;
+      // Skip nulls (withRetry returned null), errors (runInParallelBatches wrapper),
+      // or any shape without the expected matches/rejected fields.
+      if (!res || !resAny || resAny.success === false || !('matches' in resAny)) {
+        const err = resAny?.error || 'batch chunk returned no result';
+        console.warn(`[RiskControlMappingAgent] Skipping batch chunk: ${err}`);
+        continue;
+      }
       chunksOk++;
-      allMatches.push(...res.matches);
-      allRejected.push(...res.rejected);
+      allMatches.push(...resAny.matches);
+      allRejected.push(...resAny.rejected);
     }
 
     if (chunksOk === 0) return null;
