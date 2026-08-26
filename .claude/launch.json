@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "frontend-static",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "5500", "--directory", "C:\\Users\\Sanela Srujan\\Desktop\\ai agent\\frontend"],
+      "port": 5500
+    },
+    {
+      "name": "backend-api",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "C:\\Users\\Sanela Srujan\\Downloads\\Kowshik agent\\Kowshik agent\\backend", "run", "dev"],
+      "port": 3001,
+      "env": {"PORT": "3001"}
+    }
+  ]
+}

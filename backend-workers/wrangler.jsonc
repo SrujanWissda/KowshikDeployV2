@@ -1,0 +1,52 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "grc-agentic-workers",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-31",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // Non-secret config. Secrets (API keys, passwords, client secret) are set via
+  // `wrangler secret put <NAME>` instead — see Phase 4 in the migration plan.
+  "vars": {
+    "GEMINI_MODEL": "gemini-1.5-flash",
+    "GEMINI_EMBEDDING_MODEL": "gemini-embedding-001",
+    "GEMINI_TIMEOUT_MS": "90000",
+    "GEMINI_TOOL_MAX_TOKENS": "4096",
+    "SERVICENOW_USE_LIVE": "true",
+    "SERVICENOW_INSTANCE_URL": "https://dev192667.service-now.com",
+    "SALESFORCE_USE_LIVE": "true",
+    "SALESFORCE_INSTANCE_URL": "https://wissda2.my.salesforce.com"
+  },
+
+  // No `id` — Wrangler 4.45+ auto-provisioning. On the first `wrangler deploy`
+  // (run non-interactively by GitHub Actions using CLOUDFLARE_API_TOKEN /
+  // CLOUDFLARE_ACCOUNT_ID), Wrangler creates these KV namespaces via the
+  // Cloudflare API and links them to this Worker — no local `wrangler login`
+  // or manual `wrangler kv namespace create` needed. Cloudflare keeps the
+  // binding-to-resource link server-side, so re-deploying from a fresh CI
+  // checkout (which never sees a written-back id) still reuses the same
+  // namespace instead of creating a duplicate.
+  "kv_namespaces": [
+    { "binding": "ADAPTER_CONFIGS" },
+    { "binding": "VECTOR_CACHE" }
+  ],
+
+  // Same auto-provisioning behavior for D1 — `database_id` omitted. The table
+  // schema itself still needs an explicit `wrangler d1 migrations apply
+  // --remote` step (auto-provisioning only creates the empty database), which
+  // the deploy workflow runs right after `wrangler deploy`.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "grc-observability",
+      "migrations_dir": "./migrations"
+    }
+  ],
+
+  "workflows": [
+    { "binding": "CONTROL_EFFECTIVENESS_WORKFLOW", "name": "control-effectiveness", "class_name": "ControlEffectivenessWorkflow" },
+    { "binding": "INHERENT_ASSESSMENT_WORKFLOW", "name": "inherent-assessment", "class_name": "InherentAssessmentWorkflow" },
+    { "binding": "RISK_CONTROL_MAPPING_WORKFLOW", "name": "risk-control-mapping", "class_name": "RiskControlMappingWorkflow" }
+  ]
+}

@@ -1,0 +1,46 @@
+name: Deploy backend-workers to Cloudflare
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend-workers/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        working-directory: backend-workers
+        run: npm ci
+
+      # First run auto-provisions the 2 KV namespaces + D1 database (Wrangler
+      # 4.45+ automatic provisioning — see wrangler.jsonc) and links them to
+      # this Worker. No local `wrangler login` or manual `kv namespace create`
+      # / `d1 create` needed.
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: backend-workers
+          command: deploy
+
+      # Auto-provisioning only creates the empty D1 database — the schema
+      # itself still needs an explicit migrations step. Safe to re-run on
+      # every deploy: Wrangler tracks which migrations already applied.
+      - name: Apply D1 migrations
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: backend-workers
+          command: d1 migrations apply grc-observability --remote

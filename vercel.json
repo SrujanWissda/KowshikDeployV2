@@ -1,0 +1,22 @@
+{
+  "buildCommand": "npm run vercel-build",
+  "outputDirectory": "frontend",
+  "functions": {
+    "api/index.ts": {
+      "memory": 1024,
+      "maxDuration": 300
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index.ts"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/health/integrity-scan?sinceHours=24",
+      "schedule": "0 6 * * *"
+    }
+  ]
+}

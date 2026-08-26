@@ -1,0 +1,15 @@
+{
+  "name": "grc-agnostic-agents-vercel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Agnostic GRC AI Agent Hub",
+  "scripts": {
+    "vercel-build": "cd backend && npm install && npm run build"
+  },
+  "dependencies": {
+    "@vercel/node": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

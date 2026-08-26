@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agnostic GRC AI Agent Hub</title>
+  <!-- Google Fonts Outfit & Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+  <div class="glow-bg"></div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-logo">
+        <div class="logo-icon"></div>
+        <div class="logo-text">
+          <h1>Agnostic GRC Agent Hub</h1>
+          <p>Decoupled multi-platform compliance reasoning engine</p>
+        </div>
+      </div>
+      <div class="header-status">
+        <label for="select-instance" style="margin-right:0.5rem; font-size:0.85rem; opacity:0.85;">Instance:</label>
+        <select id="select-instance" class="select-instance" title="ServiceNow Instance">
+          <option disabled>⏳ Loading instances...</option>
+        </select>
+        <span class="status-dot green"></span>
+        <span id="connection-status">Detecting Server...</span>
+        <button class="btn-retry-connection" id="btn-retry-connection" onclick="retryBackendConnection()"
+          title="Re-check server connection">&#8635;</button>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="app-tabs">
+      <button class="tab-btn active" id="tab-sandbox">Agent Sandbox</button>
+      <button class="tab-btn" id="tab-onboarding">Schema Onboarding Agent</button>
+      <button class="tab-btn" id="tab-observability">Observability</button>
+      <button class="tab-btn" id="tab-integrity">Integrity Monitoring</button>
+      <button class="tab-btn" id="tab-architecture">System Architecture</button>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="app-main">
+
+      <!-- View 1: Agent Sandbox -->
+      <section class="tab-content active" id="content-sandbox">
+        <div class="grid-layout">
+
+          <!-- Column 1: Configuration Panel -->
+          <div class="glass-card config-panel">
+            <h2 class="section-title">Execution Controls</h2>
+
+            <div class="form-group">
+              <label for="select-platform">Target GRC Platform</label>
+              <div class="select-wrapper">
+                <select id="select-platform">
+                  <!-- JS populated -->
+                </select>
+              </div>
+              <p class="field-hint" id="platform-desc">Adapter translating target records to agnostic models</p>
+            </div>
+
+            <div class="form-group">
+              <label for="select-agent">Compliance Agent</label>
+              <div class="select-wrapper">
+                <select id="select-agent">
+                  <!-- JS populated -->
+                </select>
+              </div>
+              <p class="field-hint" id="agent-desc">Reasoning node assessing targets without platform code</p>
+            </div>
+
+            <div class="form-group">
+              <label for="select-target">Target Record ID</label>
+              <div class="select-wrapper">
+                <select id="select-target">
+                  <!-- JS populated -->
+                </select>
+              </div>
+              <p class="field-hint">Entity instance, risk record, or audit response set</p>
+            </div>
+
+            <button class="btn btn-primary" id="btn-run">
+              <span class="btn-text">Execute AI Agent</span>
+              <div class="spinner hide" id="run-spinner"></div>
+            </button>
+          </div>
+
+          <!-- Column 2: Agnostic GRC Pipeline Console -->
+          <div class="console-panel">
+            <div class="console-header">
+              <h3>Agnostic Core Processing Pipeline</h3>
+              <div class="console-badge" id="pipeline-step">Idle</div>
+            </div>
+
+            <div class="console-flow" id="console-flow-anim">
+              <div class="flow-node active" id="node-read">
+                <div class="node-icon read"></div>
+                <span>DB Read</span>
+              </div>
+              <div class="flow-arrow"></div>
+              <div class="flow-node" id="node-agnostic">
+                <div class="node-icon model"></div>
+                <span>Zod Translation</span>
+              </div>
+              <div class="flow-arrow"></div>
+              <div class="flow-node" id="node-llm">
+                <div class="node-icon llm"></div>
+                <span>Gemini Core</span>
+              </div>
+              <div class="flow-arrow"></div>
+              <div class="flow-node" id="node-write">
+                <div class="node-icon write"></div>
+                <span>Adapter Writeback</span>
+              </div>
+            </div>
+
+            <div class="console-tabs">
+              <button class="c-tab-btn active" data-target="console-raw">Source Record</button>
+              <button class="c-tab-btn" data-target="console-translation">Agnostic JSON</button>
+              <button class="c-tab-btn" data-target="console-prompt">LLM Prompt</button>
+              <button class="c-tab-btn" data-target="console-writeback">Writeback logs</button>
+            </div>
+
+            <div class="console-output">
+              <div class="console-pane active" id="console-raw">
+                <pre><code class="json-code">// Select a GRC platform, agent, and target above to begin mapping pipeline...</code></pre>
+              </div>
+              <div class="console-pane" id="console-translation">
+                <pre><code class="json-code">// Raw database records parsed into standard schema-agnostic Zod objects...</code></pre>
+              </div>
+              <div class="console-pane" id="console-prompt">
+                <pre><code class="text-code">// Prompt generated using localized guides, rubrics, and active issue contexts...</code></pre>
+              </div>
+              <div class="console-pane" id="console-writeback">
+                <pre><code class="log-code">// Logs from platform-specific adapter operations writing results to database...</code></pre>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- View 2: Schema Onboarding -->
+      <section class="tab-content" id="content-onboarding">
+        <div class="onboard-layout">
+          <div class="glass-card onboard-input-card onboard-live-card">
+            <h2>Live Discovery (Universal Schema Discovery Agent)</h2>
+            <p>Connects directly to a live Salesforce org, introspects its real object schema, vector-matches
+              tables/fields against our agnostic models, confirms the mapping with the LLM, then validates against live
+              sample records — producing a config the 3 reasoning agents can run against immediately, with zero new
+              adapter code.</p>
+
+            <div class="form-group">
+              <label for="text-live-platform-name">New Platform Name</label>
+              <input type="text" id="text-live-platform-name" placeholder="e.g. Salesforce Sandbox - Org A">
+            </div>
+
+            <div class="form-group">
+              <label for="text-live-entity-label">Entity Label (optional)</label>
+              <input type="text" id="text-live-entity-label" placeholder="e.g. Business Unit">
+            </div>
+
+            <button class="btn btn-primary" id="btn-live-discover">
+              <span class="btn-text">Discover Live Schema</span>
+              <div class="spinner hide" id="live-discover-spinner"></div>
+            </button>
+            <p class="field-hint" id="live-discover-status"></p>
+          </div>
+
+          <div class="glass-card onboard-input-card">
+            <h2>Add New GRC Tool Integration (Paste Mode)</h2>
+            <p>Paste a raw API response, database table schema, or unstructured documentation from a target GRC tool.
+              The Schema Discovery Agent will dynamically create field mapping models to match our platform-agnostic
+              models.</p>
+
+            <div class="form-group">
+              <label for="text-metadata">Platform Schema / Documentation Details</label>
+              <textarea id="text-metadata" placeholder="Example:
+Table: enterprise_risk_registry
+Columns:
+- risk_uuid (primary key)
+- label (risk title)
+- details_long (unstructured vulnerability details)
+- owning_bu (business unit identifier)
+..."></textarea>
+            </div>
+
+            <button class="btn btn-primary" id="btn-parse">
+              <span class="btn-text">Discover & Map Schema</span>
+              <div class="spinner hide" id="parse-spinner"></div>
+            </button>
+          </div>
+
+          <div class="glass-card onboard-result-card">
+            <h2>Mapped Adapter Schema Configuration</h2>
+            <div class="mapping-status" id="mapping-status-label">Awaiting input...</div>
+            <div class="onboard-output">
+              <pre><code class="json-code" id="parsed-schema-output">// Field mappings and structural alignments will output here...</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- View: AI Observability -->
+      <section class="tab-content" id="content-observability">
+        <div class="glass-card" style="margin-bottom: 1.5rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1rem;">
+            <h2 style="margin:0;">AI Observability</h2>
+            <button class="btn btn-primary" id="btn-obs-refresh"
+              style="width:auto; padding: 0.5rem 1.25rem;">Refresh</button>
+          </div>
+          <p>Every agent execution is recorded as a trace: each LLM call, embedding call, and platform query/write
+            inside it becomes a span with latency, outcome, and any self-healing actions taken. Data persists in
+            <code>backend/data/traces.jsonl</code>.</p>
+          <div class="obs-stats-grid" id="obs-stats">
+            <!-- JS populated stat tiles -->
+          </div>
+        </div>
+
+        <div class="glass-card">
+          <h2>Recent Traces</h2>
+          <div class="obs-filter-row">
+            <input type="text" id="obs-search" placeholder="Search platform, agent, table, SOQL, error text..."
+              oninput="renderObservabilityTraces()">
+            <label class="obs-filter-checkbox"><input type="checkbox" id="obs-errors-only"
+                onchange="renderObservabilityTraces()"> Errors/fallbacks only</label>
+            <button class="btn-retry-connection" id="btn-obs-expand-all" onclick="toggleAllTraces()"
+              title="Expand/collapse all">Expand all</button>
+          </div>
+          <div id="obs-traces">
+            <p class="field-hint">No traces yet — run an agent from the Sandbox tab, then hit Refresh.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- View: Integrity Monitoring -->
+      <section class="tab-content" id="content-integrity">
+        <div class="glass-card" style="margin-bottom: 1.5rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1rem;">
+            <h2 style="margin:0;">Integrity Monitoring</h2>
+            <button class="btn btn-primary" id="btn-integrity-run" style="width:auto; padding: 0.5rem 1.25rem;">Run Scan Now</button>
+          </div>
+          <p>Writes can report success while a platform silently drops a field, and a field that looked fine right
+            after a write can still get cleared by something else afterward. This scan re-reads recently-updated
+            records on every connected platform and flags anything that doesn't add up — it runs automatically once
+            a day via a scheduled job, and the same check can be triggered on demand below. Rendering is generic:
+            any adapter that implements a scan shows up here automatically, with no platform-specific code.</p>
+          <div id="integrity-run-status"></div>
+        </div>
+
+        <div class="glass-card">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1rem;">
+            <h2 style="margin:0;">Scan History</h2>
+            <button class="btn-retry-connection" id="btn-integrity-refresh" onclick="loadIntegrityHistory()">Refresh</button>
+          </div>
+          <div id="integrity-history">
+            <p class="field-hint">No scan history yet — click Refresh, or Run Scan Now above.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- View 3: System Architecture -->
+      <section class="tab-content" id="content-architecture">
+        <div class="glass-card architecture-card">
+          <h2>Platform Agnostic GRC Architecture</h2>
+          <p>By decoupling the GRC platform adapters, reasoning engine, and LLM interfaces, you can plug in any platform
+            API or switch LLM providers without touching the core validation and compliance logic.</p>
+
+          <div class="arch-diagram">
+            <!-- ServiceNow Adapter Node -->
+            <div class="arch-box plat-node">
+              <h4>ServiceNow GRC</h4>
+              <p>GlideRecord & REST Tables</p>
+              <div class="arch-badge">Platform Adapter</div>
+            </div>
+
+            <!-- Salesforce Adapter Node -->
+            <div class="arch-box plat-node">
+              <h4>Salesforce GRC</h4>
+              <p>SOQL & Custom Objects</p>
+              <div class="arch-badge">Platform Adapter</div>
+            </div>
+
+            <!-- Archer Adapter Node -->
+            <div class="arch-box plat-node pending">
+              <h4>Future Platform</h4>
+              <p>Archer / LogicGate / Jira GRC</p>
+              <div class="arch-badge">Plug & Play Adapter</div>
+            </div>
+
+            <!-- Directional Flow -->
+            <div class="arch-connector-set">
+              <div class="connector-line"></div>
+              <div class="connector-line"></div>
+              <div class="connector-line"></div>
+            </div>
+
+            <!-- Core Reasoning Engine Node -->
+            <div class="arch-box core-node">
+              <h4>Core GRC Reasoning Engine</h4>
+              <p>TypeScript + Zod validation models</p>
+              <div class="core-sub-box">Risk-Control Mapping Agent</div>
+              <div class="core-sub-box">Inherent Assessment Agent</div>
+              <div class="core-sub-box">Control Effectiveness Agent</div>
+              <div class="core-sub-box highlight">Schema Discovery Agent (Onboarding)</div>
+              <div class="arch-badge">Zero Platform Access Code</div>
+            </div>
+
+            <!-- Directional Flow -->
+            <div class="arch-connector-single"></div>
+
+            <!-- LLM Abstraction Layer Node -->
+            <div class="arch-box llm-node">
+              <h4>LLM Adapter Layer</h4>
+              <p>Google Gemini Core (JSON Schema forced)</p>
+              <div class="arch-badge">Swappable Model Client</div>
+            </div>
+          </div>
+
+          <div class="advantages-grid">
+            <div class="advantage-item">
+              <h5>🛡️ Zero-Access Core</h5>
+              <p>Core logic works solely on unified schema structures. Platform bugs, table modifications, or access
+                control failures stay contained within the adapter layer.</p>
+            </div>
+            <div class="advantage-item">
+              <h5>⚡ Cost & Speed Optimization</h5>
+              <p>Calculates database fingerprints from active evidence and queries prior closed audits to reuse answers.
+                Identical states carry forward instantly with zero LLM API costs.</p>
+            </div>
+            <div class="advantage-item">
+              <h5>🔌 Instant Onboarding</h5>
+              <p>Using the Schema Discovery Agent, entering raw GRC API properties generates instant translation
+                bindings for new platforms in seconds.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="app.js?v=4"></script>
+</body>
+
+</html>

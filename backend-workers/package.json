@@ -1,0 +1,24 @@
+{
+  "name": "grc-agentic-workers",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Workers + Workflows port of the GRC agentic backend, triggered from ServiceNow UI Actions",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "db:migrate:local": "wrangler d1 migrations apply grc-observability --local",
+    "db:migrate:remote": "wrangler d1 migrations apply grc-observability --remote"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "hono": "^4.12.33",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260731.1",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.118.0"
+  }
+}

@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment / secrets
+.env
+.dev.vars
+
+# Local runtime data (regenerable caches, logs)
+backend/data/
+backend/generated_adapters/*.json
+
+# Wrangler local state
+.wrangler/
+
+# OS
+.DS_Store
+Thumbs.db
+
+.vercel
+.env*

@@ -1,0 +1,10 @@
+# Copy to .dev.vars (gitignored) and fill in with the same values already in
+# backend/.env, for local `wrangler dev` testing before any real secrets are
+# pushed to Cloudflare via `wrangler secret put`.
+
+GEMINI_API_KEY=
+SERVICENOW_USERNAME=
+SERVICENOW_PASSWORD=
+SALESFORCE_CLIENT_ID=
+SALESFORCE_CLIENT_SECRET=
+WORKER_INBOUND_TOKEN=
