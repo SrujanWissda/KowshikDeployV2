@@ -122,20 +122,26 @@ if (fs.existsSync(frontendDir)) {
 // instances exist.
 // ============================================================================
 app.get('/api/instances', (req, res) => {
-  const validInstances = instanceRegistry.getValidInstances();
-  const instances = validInstances.map(id => {
-    const meta = instanceRegistry.getInstanceMetadata(id);
+  const allInstances = instanceRegistry.getAllInstancesWithStatus();
+  const instances = allInstances.map(row => {
+    const meta = instanceRegistry.getInstanceMetadata(row.instanceId);
     return {
-      instanceId: id,
-      isConfigured: meta?.isConfigured ?? false,
-      label: id.replace(/^instance_0*/i, 'Instance ')
-        .replace(/_/g, ' ')
-        .replace(/\b\w/g, l => l.toUpperCase())
+      instanceId:   row.instanceId,
+      isConfigured: row.isValid,                 // false = misconfigured
+      isValid:      row.isValid,
+      label:        row.instanceId.replace(/^instance_0*/i, 'Instance ')
+                      .replace(/_/g, ' ')
+                      .replace(/\b\w/g, l => l.toUpperCase()),
+      hasUrl:       !!(meta?.hasUrl),            // ✔ = URL env var found
+      hasKey:       !!(meta?.hasKey),            // ✔ = KEY or USERNAME+PASSWORD env vars found
+      error:        row.error || null            // ❌ human-readable error: "Missing URL or credentials..."
     };
   });
   res.json({
     success: true,
     count: instances.length,
+    validCount: instances.filter(i => i.isValid).length,
+    invalidCount: instances.filter(i => !i.isValid).length,
     instances
   });
 });
@@ -285,9 +291,16 @@ app.post('/api/run-agent', async (req, res) => {
     }
   } catch (error: any) {
     console.error(`[ISOLATION] Failed to get adapter for instance '${instanceId}': ${error.message}`);
+    // Include registry-level diagnostic info so callers can immediately see WHICH
+    // env vars are missing / set (not the actual values, just SET/NOT SET).
+    const instanceConfigDiagnostics = instanceRegistry.getInstanceMetadata(instanceId)
+      || { instanceId, isConfigured: false, hasUrl: false, hasKey: false };
     return res.status(500).json({
-      error: `Failed to initialize adapter for instance '${instanceId}'`,
-      instanceId
+      success: false,
+      error: `[ISOLATION] Failed to initialize adapter for instance '${instanceId}': ${error.message}`,
+      instanceId,
+      instanceConfigDiagnostics,
+      instanceList: instanceRegistry.getAllInstancesWithStatus()
     });
   }
 
