@@ -5,7 +5,7 @@ import { ServiceNowAdapter } from './adapters/servicenow';
 import { GeminiLLMClient } from './llm/llm_client';
 import { InherentAssessmentAgent } from './core/agents';
 
-const recordId = '3818156193438bd085ebf24efaba1006';
+const recordId = process.argv[2] || '8375da6193cb8bd085ebf24efaba106f';
 
 async function main() {
   console.log(`=== Running Inherent Assessment for record: ${recordId} on instance_002 ===\n`);

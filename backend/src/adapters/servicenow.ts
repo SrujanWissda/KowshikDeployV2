@@ -1784,33 +1784,37 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
 
   async getFinancialRiskEvents(riskSysId?: string): Promise<any[]> {
     if (!this.useLive) return [];
-    const fields = 'sys_id,name,expected_loss,impact,discovered_on,description,risk_reference';
+    const eventFields = 'sys_id,name,expected_loss,impact,discovered_on,description';
     try {
       if (riskSysId) {
-        const directRows = await this.queryTable<any>('sn_risk_advanced_event', {
-          sysparm_fields: fields,
-          sysparm_query: `risk_reference=${riskSysId}^ORDERBYDESCsys_created_on`,
+        // Step 1: Query the M2M join table sn_risk_advanced_m2m_event_risk to get linked event sys_ids
+        const joinRows = await this.queryTable<any>('sn_risk_advanced_m2m_event_risk', {
+          sysparm_fields: 'sys_id,risk,risk_event',
+          sysparm_query: `risk=${riskSysId}`,
           sysparm_limit: '100'
         });
-        if (directRows && directRows.length > 0) {
-          return directRows.map(r => this.mapFinancialEventRow(r, true));
+        if (joinRows && joinRows.length > 0) {
+          // Step 2: Fetch the actual event records by their sys_ids
+          const eventIds = joinRows.map((r: any) => getValue(r.risk_event)).filter(Boolean);
+          if (eventIds.length > 0) {
+            const eventRows = await this.queryTable<any>('sn_risk_advanced_event', {
+              sysparm_fields: eventFields,
+              sysparm_query: `sys_idIN${eventIds.join(',')}^ORDERBYDESCsys_created_on`,
+              sysparm_limit: '100'
+            });
+            if (eventRows && eventRows.length > 0) {
+              return eventRows.map((r: any) => this.mapFinancialEventRow(r, true));
+            }
+          }
         }
       }
-      // If none found from risk_reference, query all records where risk_reference is empty/unlinked
-      const unlinkedRows = await this.queryTable<any>('sn_risk_advanced_event', {
-        sysparm_fields: fields,
-        sysparm_query: 'risk_referenceISEMPTY^ORDERBYDESCsys_created_on',
-        sysparm_limit: '100'
-      });
-      if (unlinkedRows && unlinkedRows.length > 0) {
-        return unlinkedRows.map(r => this.mapFinancialEventRow(r, false));
-      }
-      const rows = await this.queryTable<any>('sn_risk_advanced_event', {
-        sysparm_fields: fields,
+      // Fallback: query all events (unlinked analysis)
+      const allRows = await this.queryTable<any>('sn_risk_advanced_event', {
+        sysparm_fields: eventFields,
         sysparm_query: 'ORDERBYDESCsys_created_on',
         sysparm_limit: '100'
       });
-      return (rows || []).map(r => this.mapFinancialEventRow(r, false));
+      return (allRows || []).map((r: any) => this.mapFinancialEventRow(r, false));
     } catch {
       return [];
     }
@@ -1824,7 +1828,7 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
         sysparm_query: 'ORDERBYDESCsys_created_on',
         sysparm_limit: '100'
       });
-      return (rows || []).map(r => this.mapFinancialEventRow(r, false));
+      return (rows || []).map((r: any) => this.mapFinancialEventRow(r, false));
     } catch {
       return [];
     }
@@ -1911,23 +1915,8 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       const results: any[] = [];
       const seenIds = new Set<string>();
 
-      // 1. Direct risk linkage
-      if (riskSysId) {
-        const directRows = await this.queryTable<any>('sn_grc_issue', {
-          sysparm_fields: fields,
-          sysparm_query: `item=${riskSysId}^ORDERBYDESCsys_created_on`,
-          sysparm_limit: '100'
-        });
-        for (const r of directRows || []) {
-          const id = getValue(r.sys_id);
-          if (id && !seenIds.has(id)) {
-            seenIds.add(id);
-            results.push(this.mapGrcIssueRow(r, true));
-          }
-        }
-      }
-
-      // 2. Issues related to found exams
+      // Priority: Issues linked to the risk's related exams (via u_exam or parent field on sn_grc_issue)
+      // Issues are discovered FROM exams, not directly from risk sys_id via item field
       if (examSysIds && examSysIds.length > 0) {
         const examQuery = examSysIds.map(eid => `u_exam=${eid}^ORparent=${eid}`).join('^OR');
         const examIssueRows = await this.queryTable<any>('sn_grc_issue', {
@@ -1948,22 +1937,13 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
         return results;
       }
 
-      // 3. Fallback: Search records where item is empty, fallback to all records
-      const unlinkedRows = await this.queryTable<any>('sn_grc_issue', {
-        sysparm_fields: fields,
-        sysparm_query: 'itemISEMPTY^ORDERBYDESCsys_created_on',
-        sysparm_limit: '100'
-      });
-      if (unlinkedRows && unlinkedRows.length > 0) {
-        return unlinkedRows.map(r => this.mapGrcIssueRow(r, false));
-      }
-
+      // Fallback: All issues (unlinked analysis — LLM determines relevance)
       const rows = await this.queryTable<any>('sn_grc_issue', {
         sysparm_fields: fields,
         sysparm_query: 'ORDERBYDESCsys_created_on',
         sysparm_limit: '100'
       });
-      return (rows || []).map(r => this.mapGrcIssueRow(r, false));
+      return (rows || []).map((r: any) => this.mapGrcIssueRow(r, false));
     } catch {
       return [];
     }
@@ -1999,24 +1979,26 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
 
   async getIncidents(riskSysId?: string): Promise<any[]> {
     if (!this.useLive) return [];
-    const fields = 'sys_id,number,short_description,description,incident_type,u_type,category,affected_records,impact,state,severity';
+    const fields = 'sys_id,number,short_description,description,incident_type,u_type,category,affected_records,impact,state,severity,u_risk';
     try {
       if (riskSysId) {
+        // Direct link: incidents linked to this risk via u_risk field
         const directRows = await this.queryTable<any>('incident', {
           sysparm_fields: fields,
-          sysparm_query: `cmdb_ci=${riskSysId}^ORDERBYDESCsys_created_on`,
+          sysparm_query: `u_risk=${riskSysId}^ORDERBYDESCsys_created_on`,
           sysparm_limit: '100'
         });
         if (directRows && directRows.length > 0) {
-          return directRows.map(r => this.mapIncidentRow(r, true));
+          return directRows.map((r: any) => this.mapIncidentRow(r, true));
         }
       }
+      // Fallback: all incidents (unlinked analysis)
       const rows = await this.queryTable<any>('incident', {
         sysparm_fields: fields,
         sysparm_query: 'ORDERBYDESCsys_created_on',
         sysparm_limit: '100'
       });
-      return (rows || []).map(r => this.mapIncidentRow(r, false));
+      return (rows || []).map((r: any) => this.mapIncidentRow(r, false));
     } catch {
       return [];
     }
