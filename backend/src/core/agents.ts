@@ -1107,6 +1107,7 @@ export class InherentAssessmentAgent {
       relevantIssues: string[];
       issueNote: string;
       toolCallLog?: Array<{ name: string; args: any }>;
+      evidenceData?: { [key: string]: any };
     }> = [];
 
     const batchResults = await runInParallelBatches(factors, 5, async (factor) => {
@@ -1187,13 +1188,75 @@ export class InherentAssessmentAgent {
 
       const entitySearchLabel = isSalesforce ? 'Business Unit' : 'Entity';
       const searchTableLabel = isSalesforce ? "Business Unit's Downstream Issues related list" : "entity's Downstream Issues related list";
-      const techSearchTableLabel = isSalesforce
-        ? 'grc__Issue__c (unresolved issues related to grc__Business_Unit__c)'
-        : 'sn_grc_m2m_issue_to_entity (Downstream Issues related list on the entity) and sn_grc_issue';
 
       const toolsUsedLine = draft.toolCallLog && draft.toolCallLog.length > 0
         ? `TOOLS THE AGENT CHOSE TO CALL (in order): ${draft.toolCallLog.map(c => c.name).join(' → ')}`
         : 'TOOLS THE AGENT CHOSE TO CALL: none — finalized from the risk/factor context alone';
+
+      const riskQuery = encodeURIComponent(risk.name);
+
+      // Build comprehensive "WHAT WAS SEARCHED" with clean table labels, record metrics, and full URLs
+      const whatSearchedLines: string[] = [
+        `  1. ${entitySearchLabel} issues — searched the ${searchTableLabel}; found ${issueCount} unresolved issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
+        `  2. Relevant issues — ${issueRelevanceLine}`
+      ];
+
+      const auditSearchLines = [
+        `&nbsp;&nbsp;1. ${entitySearchLabel} issues — searched <a href="/now/nav/open/table/sn_grc_m2m_issue_to_entity" target="_blank">Entity Downstream Issues</a> and <a href="/now/nav/open/table/sn_grc_issue" target="_blank">GRC Issues</a>; found ${issueCount} unresolved issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
+        `&nbsp;&nbsp;2. Relevant issues — ${htmlEscape(issueRelevanceLine)}`
+      ];
+
+      if (draft.toolCallLog && draft.toolCallLog.length > 0) {
+        let searchNumber = 3;
+        for (const toolCall of draft.toolCallLog) {
+          if (toolCall.name === 'get_financial_evidence') {
+            const fin = draft.evidenceData?.financial;
+            const eventCount = fin?.events?.length || 0;
+            const totalLoss = fin?.totalExpectedLoss || 0;
+            const lossText = totalLoss > 0 ? `found ${eventCount} relevant risk event(s) with $${totalLoss.toLocaleString()} total expected loss` : `found 0 relevant financial loss events`;
+            whatSearchedLines.push(`  ${searchNumber}. Financial Risk Events — searched ${this.getTableLabel('sn_risk_advanced_event')}; ${lossText}`);
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. ${this.getTableLabel('sn_risk_advanced_event')} — searched <a href="/now/nav/open/table/sn_risk_advanced_event" target="_blank">${this.getTableLabel('sn_risk_advanced_event')}</a>; ${htmlEscape(lossText)}`);
+            searchNumber++;
+          }
+          if (toolCall.name === 'get_regulatory_evidence') {
+            const reg = draft.evidenceData?.regulatory;
+            const examCount = reg?.exams?.total || 0;
+            const findingCount = (reg?.issues?.formalFindings || 0) + (reg?.issues?.enforcementActions || 0);
+            const obsCount = reg?.issues?.informalObservations || 0;
+            whatSearchedLines.push(`  ${searchNumber}. Regulatory Evidence — searched ${this.getTableLabel('sn_compliance_exam')} and ${this.getTableLabel('sn_grc_issue')}; found ${examCount} exam(s), ${findingCount} formal finding(s)/order(s), and ${obsCount} informal observation(s)`);
+            whatSearchedLines.push(`  ${searchNumber + 1}. Regulatory Sources & URLs Impacting Rating:`);
+            whatSearchedLines.push(`     • SEC EDGAR: https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=8-K&search_text=enforcement%20${riskQuery}`);
+            whatSearchedLines.push(`     • Federal Reserve: https://www.federalreserve.gov/newsevents/news/?search=${riskQuery}`);
+            whatSearchedLines.push(`     • OCC Alerts: https://www.occ.gov/news-issuances/alerts/?search=${riskQuery}`);
+
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Regulatory evidence — searched <a href="/now/nav/open/table/sn_compliance_exam" target="_blank">${this.getTableLabel('sn_compliance_exam')}</a> and <a href="/now/nav/open/table/sn_grc_issue" target="_blank">${this.getTableLabel('sn_grc_issue')}</a> (${examCount} exams, ${findingCount} formal findings)`);
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Regulatory URLs — <a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=8-K&search_text=enforcement%20${riskQuery}" target="_blank">SEC EDGAR</a> | <a href="https://www.federalreserve.gov/newsevents/news/?search=${riskQuery}" target="_blank">Federal Reserve</a> | <a href="https://www.occ.gov/news-issuances/alerts/?search=${riskQuery}" target="_blank">OCC Alerts</a>`);
+            searchNumber += 2;
+          }
+          if (toolCall.name === 'get_customer_evidence') {
+            const cust = draft.evidenceData?.customer;
+            const incidentCount = cust?.recordCount || 0;
+            const affected = cust?.affectedCustomers || 0;
+            whatSearchedLines.push(`  ${searchNumber}. Customer Impact — searched ${this.getTableLabel('incident')}; found ${incidentCount} incident(s) with ${affected.toLocaleString()} affected customer record(s)`);
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Customer impact — searched <a href="/now/nav/open/table/incident" target="_blank">${this.getTableLabel('incident')}</a> (${incidentCount} incidents, ${affected} affected customers)`);
+            searchNumber++;
+          }
+          if (toolCall.name === 'get_reputational_evidence') {
+            const rep = draft.evidenceData?.reputational;
+            const eventCount = rep?.internalEvents?.total || 0;
+            const mentions = rep?.internalEvents?.totalMentions || 0;
+            whatSearchedLines.push(`  ${searchNumber}. Reputational Evidence — searched ${this.getTableLabel('sn_compliance_external_event')}; found ${eventCount} event(s) with ${mentions.toLocaleString()} media mention(s)`);
+            whatSearchedLines.push(`  ${searchNumber + 1}. Internet Sources & Articles Impacting Rating:`);
+            whatSearchedLines.push(`     • Google News: https://news.google.com/search?q=${riskQuery}`);
+            whatSearchedLines.push(`     • Reddit: https://www.reddit.com/search/?q=${riskQuery}&sort=new`);
+            whatSearchedLines.push(`     • Bing News: https://www.bing.com/news/search?q=${riskQuery}`);
+
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Reputational events — searched <a href="/now/nav/open/table/sn_compliance_external_event" target="_blank">${this.getTableLabel('sn_compliance_external_event')}</a> (${eventCount} events, ${mentions} mentions)`);
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Internet Search URLs — <a href="https://news.google.com/search?q=${riskQuery}" target="_blank">Google News</a> | <a href="https://www.reddit.com/search/?q=${riskQuery}&sort=new" target="_blank">Reddit</a> | <a href="https://www.bing.com/news/search?q=${riskQuery}" target="_blank">Bing News</a>`);
+            searchNumber += 2;
+          }
+        }
+      }
 
       const comment = [
         '🔍 EMA INVESTIGATION — Inherent Risk Factor Assessment',
@@ -1202,10 +1265,9 @@ export class InherentAssessmentAgent {
         `Confidence: ${confidence}`,
         '',
         'WHAT WAS SEARCHED:',
-        `  1. ${entitySearchLabel} issues — searched the ${searchTableLabel}; found ${issueCount} unresolved issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
-        `  2. Relevant issues — ${issueRelevanceLine}`,
+        ...whatSearchedLines,
         '',
-        'CONCLUSION:',
+        'CONCLUSION & RATIONALE:',
         draft.justification,
         '',
         `Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}`
@@ -1215,12 +1277,9 @@ export class InherentAssessmentAgent {
         `🔍 EMA INVESTIGATION (TECHNICAL / AUDIT TRAIL) — Inherent Risk Factor Assessment`,
         `${htmlLabel('Rating:')} ${draft.rating}<br>${htmlLabel('Confidence:')} ${confidence}`,
         htmlEscape(toolsUsedLine),
-        htmlLabel('WHAT WAS SEARCHED (table-level detail):'),
-        [
-          `&nbsp;&nbsp;1. ${entitySearchLabel} issues — searched ${techSearchTableLabel}; found ${issueCount} unresolved issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
-          `&nbsp;&nbsp;2. Relevant issues — ${htmlEscape(issueRelevanceLine)}`
-        ].join('<br>'),
-        `${htmlLabel('CONCLUSION:')}<br>${htmlEscape(draft.justification)}`,
+        htmlLabel('WHAT WAS SEARCHED (table-level detail & URLs):'),
+        auditSearchLines.join('<br>'),
+        `${htmlLabel('CONCLUSION & RATIONALE:')}<br>${htmlEscape(draft.justification)}`,
         `<i>Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}</i>`
       ].join('<br><br>');
 
@@ -1338,9 +1397,10 @@ export class InherentAssessmentAgent {
     entityLabel: string,
     isSalesforce: boolean,
     tracer: AgentTracer
-  ): Promise<{ rating: string; score: number; justification: string; issueRelevant: boolean; relevantIssues: string[]; issueNote: string; toolCallLog: Array<{ name: string; args: any }> } | null> {
+  ): Promise<{ rating: string; score: number; justification: string; issueRelevant: boolean; relevantIssues: string[]; issueNote: string; toolCallLog: Array<{ name: string; args: any }>; evidenceData?: { [key: string]: any } } | null> {
     const choiceStr = factor.choiceList.join(', ');
 
+    // Enhanced tools array: add factor-specific data sources (Financial, Regulatory, Customer, Reputational)
     const tools: ToolDeclaration[] = [
       {
         name: 'get_factor_guidance',
@@ -1351,23 +1411,58 @@ export class InherentAssessmentAgent {
         name: 'get_entity_issues',
         description: `Get unresolved (not Closed Complete) issues logged against this risk's ${entityLabel.toLowerCase()}, with priority.`,
         parameters: { type: 'OBJECT', properties: {} }
-      },
-      {
-        name: 'submit_rating',
-        description: `Finalize your assessment once you have gathered enough evidence. rating must be copied EXACTLY from: ${choiceStr}.`,
-        parameters: {
-          type: 'OBJECT',
-          properties: {
-            rating: { type: 'STRING' },
-            issue_relevant: { type: 'BOOLEAN' },
-            relevant_issues: { type: 'ARRAY', items: { type: 'STRING' } },
-            issue_note: { type: 'STRING' },
-            justification: { type: 'STRING' }
-          },
-          required: ['rating', 'issue_relevant', 'justification']
-        }
       }
     ];
+
+    // Add factor-specific tools based on the factor name
+    const factorNameLower = (factor.factorName || '').toLowerCase();
+    if (factorNameLower.includes('financial')) {
+      tools.push({
+        name: 'get_financial_evidence',
+        description: 'Get financial risk events (expected loss, impact) directly linked to this risk.',
+        parameters: { type: 'OBJECT', properties: {} }
+      });
+    }
+    if (factorNameLower.includes('regulatory') || factorNameLower.includes('legal')) {
+      tools.push({
+        name: 'get_regulatory_evidence',
+        description: 'Get regulatory evidence: compliance exams, GRC issues (formal findings, observations), and regulatory internet search results (SEC EDGAR, Federal Reserve, OCC).',
+        parameters: { type: 'OBJECT', properties: {} }
+      });
+    }
+    if (factorNameLower.includes('customer') || factorNameLower.includes('conduct') || factorNameLower.includes('market')) {
+      tools.push({
+        name: 'get_customer_evidence',
+        description: 'Get customer impact evidence: incidents by type, affected customer count, and active incidents.',
+        parameters: { type: 'OBJECT', properties: {} }
+      });
+    }
+    if (factorNameLower.includes('reputational') || factorNameLower.includes('reputation')) {
+      tools.push({
+        name: 'get_reputational_evidence',
+        description: 'Get reputational evidence: external events, media mentions, sentiment analysis, and internet search results (Google News, Reddit, Bing News).',
+        parameters: { type: 'OBJECT', properties: {} }
+      });
+    }
+
+    tools.push({
+      name: 'submit_rating',
+      description: `Finalize your assessment once you have gathered enough evidence. rating must be copied EXACTLY from: ${choiceStr}.`,
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          rating: { type: 'STRING' },
+          issue_relevant: { type: 'BOOLEAN' },
+          relevant_issues: { type: 'ARRAY', items: { type: 'STRING' } },
+          issue_note: { type: 'STRING' },
+          justification: { type: 'STRING' }
+        },
+        required: ['rating', 'issue_relevant', 'justification']
+      }
+    });
+
+    // Track evidence as tools are called, to include in rating justification
+    const evidenceData: { [key: string]: any } = {};
 
     const executeTool = async (name: string, _args: any): Promise<any> => {
       switch (name) {
@@ -1379,6 +1474,26 @@ export class InherentAssessmentAgent {
             issues: entityIssues.map(i => ({ number: i.number || null, desc: i.desc, state: i.state, priority: i.priority || 'Not set' })),
             count: entityIssues.length
           };
+        }
+        case 'get_financial_evidence': {
+          const result = await this.getFinancialEvidence(risk.sysId, risk.name, risk.description || '');
+          evidenceData.financial = result;
+          return result;
+        }
+        case 'get_regulatory_evidence': {
+          const result = await this.getRegulatoryEvidence(risk.sysId, risk.name, risk.description || '');
+          evidenceData.regulatory = result;
+          return result;
+        }
+        case 'get_customer_evidence': {
+          const result = await this.getCustomerEvidence(risk.sysId, risk.name, risk.description || '');
+          evidenceData.customer = result;
+          return result;
+        }
+        case 'get_reputational_evidence': {
+          const result = await this.getReputationalEvidence(risk.sysId, risk.name, risk.description || '');
+          evidenceData.reputational = result;
+          return result;
         }
         default:
           return { error: `Unknown tool: ${name}` };
@@ -1414,11 +1529,15 @@ export class InherentAssessmentAgent {
       '   this factor, so your rating is an ESTIMATE from the rubric thresholds and domain knowledge. Only where a',
       '   relevant issue exists is the rating partly GROUNDED in real data. For regulatory/environment-type factors',
       '   you may reason about the broader real-world landscape, clearly noting it as external reasoning.',
+      '5. CRITICAL: When submitting your rating, you MUST structure your justification with specific evidence numbers and sections:',
+      '   • WHY THIS RATING WAS CHOSEN: Cite the specific rubric band matched, key drivers with exact numbers ($ loss figures, exam counts, formal orders, affected customer counts, media mentions), and compare directly against rubric thresholds.',
+      '   • HOW ACCURATE & GROUNDED: State confidence level, table records evaluated, and why specific records were deemed relevant vs filtered out.',
+      '   • CONCLUSION: Concise executive synthesis.',
       '',
       'When you have enough evidence, call submit_rating with your final rating; issue_relevant (true only if a',
       'specific issue genuinely influenced THIS factor); relevant_issues (the exact issue description text for each',
       'issue that applied, empty array otherwise); issue_note (one short phrase, under 15 words, on why issues were',
-      'or weren\'t relevant); and justification (1-2 sentences, under 300 characters, citing the rubric band and basis).'
+      'or weren\'t relevant); and justification (must include the structured WHY, HOW ACCURATE, and CONCLUSION sections).'
     ].join('\n');
 
     tracer.log('REQUEST', {
@@ -1446,6 +1565,26 @@ export class InherentAssessmentAgent {
       justification: loop.result.justification
     });
 
+    // Verify rating against actual evidence numbers before finalizing
+    const evidenceSummary = this.buildEvidenceSummary(evidenceData, factor.factorName);
+    if (evidenceSummary) {
+      const verificationResult = await this.verifyFactorRating(
+        factor,
+        loop.result.rating,
+        loop.result.justification,
+        evidenceSummary,
+        tracer
+      );
+      if (verificationResult) {
+        loop.result.rating = verificationResult.rating;
+        loop.result.justification = verificationResult.justification;
+        tracer.log('RATING_ADJUSTED', {
+          factor: factor.factorName,
+          reason: verificationResult.reason
+        });
+      }
+    }
+
     const score = this.resolveInherentRating(factor, loop.result.rating);
     if (score === undefined) return null;
 
@@ -1456,7 +1595,8 @@ export class InherentAssessmentAgent {
       issueRelevant: loop.result.issue_relevant === true,
       relevantIssues: loop.result.relevant_issues || [],
       issueNote: loop.result.issue_note || '',
-      toolCallLog: loop.toolCallLog
+      toolCallLog: loop.toolCallLog,
+      evidenceData
     };
   }
 
@@ -1605,6 +1745,522 @@ export class InherentAssessmentAgent {
 
     if (summary) {
       await writeVerified(tracer, `instance ${instanceSysId} inherent_justification`, () => writeInherentSummary(instanceSysId, summary));
+    }
+  }
+
+  // ── Table Label Mapping ────────────────────────────────────────────────
+  private getTableLabel(tableName: string): string {
+    const labels: { [key: string]: string } = {
+      'sn_risk_advanced_event': 'Financial Risk Events',
+      'sn_compliance_exam': 'Compliance Exams',
+      'sn_grc_issue': 'GRC Issues',
+      'incident': 'Incident Records',
+      'sn_compliance_external_event': 'External Events',
+      'SEC EDGAR': 'SEC EDGAR',
+      'Federal Reserve': 'Federal Reserve',
+      'OCC Alerts': 'OCC Alerts',
+      'Google News': 'Google News',
+      'Reddit': 'Reddit',
+      'Bing News': 'Bing News'
+    };
+    return labels[tableName] || tableName;
+  }
+
+  // ── LLM Semantic Filtering: given ALL records, pick relevant ones ────────
+  private async filterBySemanticRelevance(allRecords: any[], context: string, recordType: string): Promise<any[]> {
+    if (allRecords.length === 0) return [];
+
+    // For small sets, return all
+    if (allRecords.length <= 5) return allRecords;
+
+    // Prioritize records that have material content (non-zero loss, high mentions, formal findings, active incidents)
+    const sortedRecords = [...allRecords].sort((a, b) => {
+      const aScore = (a.expected_loss || 0) + ((a.affected_records || 0) * 100) + ((a.media_mention_count || 0) * 1000) + ((a.formal_findings || 0) * 10000);
+      const bScore = (b.expected_loss || 0) + ((b.affected_records || 0) * 100) + ((b.media_mention_count || 0) * 1000) + ((b.formal_findings || 0) * 10000);
+      return bScore - aScore;
+    });
+
+    const candidates = sortedRecords.slice(0, 30);
+
+    try {
+      const recordSummaries = candidates.map((r: any, idx: number) => {
+        const desc = r.description || r.name || r.short_description || r.title || JSON.stringify(r).substring(0, 100);
+        const lossPart = r.expected_loss ? ` [Loss: $${r.expected_loss.toLocaleString()}]` : '';
+        const affPart = r.affected_records ? ` [Affected: ${r.affected_records}]` : '';
+        const mentionPart = r.media_mention_count ? ` [Mentions: ${r.media_mention_count}]` : '';
+        const findingPart = r.formal_findings ? ` [Formal Findings: ${r.formal_findings}]` : '';
+        return `[${idx + 1}] ${desc}${lossPart}${affPart}${mentionPart}${findingPart}`;
+      }).join('\n');
+
+      const prompt = `${context}\n\nCandidate Records:\n${recordSummaries}\n\nSelect indices of records that are relevant to this risk. If in doubt for material losses/findings, include them.\nRespond ONLY with JSON: {"relevant_indices": [1, 2]}`;
+
+      const schema = {
+        type: 'OBJECT',
+        properties: {
+          relevant_indices: { type: 'ARRAY', items: { type: 'INTEGER' } }
+        },
+        required: ['relevant_indices']
+      };
+
+      const result = await this.llm.generateStructuredOutput<{ relevant_indices: number[] }>(prompt, 'You are filtering records for relevance.', schema);
+      if (result && Array.isArray(result.relevant_indices) && result.relevant_indices.length > 0) {
+        return candidates.filter((_, i) => result.relevant_indices.includes(i + 1));
+      }
+      // If none selected by indices, return candidates that have non-zero loss or impact
+      const material = candidates.filter(r => (r.expected_loss || 0) > 0 || (r.formal_findings || 0) > 0 || (r.media_mention_count || 0) > 0);
+      return material.length > 0 ? material : candidates.slice(0, 5);
+    } catch {
+      return candidates.slice(0, 10);
+    }
+  }
+
+  // ── Financial Risk Data Source ──────────────────────────────────────────
+  private async getFinancialEvidence(riskSysId: string, riskName: string, riskDescription: string): Promise<any> {
+    try {
+      // Query ALL financial events - LLM will filter for relevance
+      const allEvents = await (this.adapter as any).getAllFinancialRiskEvents?.() || await (this.adapter as any).getFinancialRiskEvents?.(riskSysId) || [];
+
+      // LLM semantic filtering for relevance
+      const events = await this.filterBySemanticRelevance(allEvents, `Which financial events relate to risk: ${riskName}? Description: ${riskDescription}`, 'financial_event');
+      const totalLoss = events.reduce((sum: number, e: any) => sum + (e.expected_loss || 0), 0);
+      const highestLoss = Math.max(...events.map((e: any) => e.expected_loss || 0), 0);
+
+      const sources: any[] = [];
+      if (events.length > 0) {
+        sources.push({
+          name: this.getTableLabel('sn_risk_advanced_event'),
+          recordCount: events.length,
+          url: `/now/nav/open/table/sn_risk_advanced_event?sysparm_query=sys_id=${riskSysId}`,
+          found: true
+        });
+      }
+
+      return {
+        sources,
+        recordCount: events.length,
+        totalExpectedLoss: totalLoss,
+        highestSingleLoss: highestLoss,
+        events: events.map((e: any) => ({ name: e.name, loss: e.expected_loss, impact: e.impact, discovered: e.discovered_on })),
+        summary: events.length > 0 ? `Found ${events.length} ${this.getTableLabel('sn_risk_advanced_event').toLowerCase()}: $${totalLoss.toLocaleString()} total expected loss` : `No ${this.getTableLabel('sn_risk_advanced_event').toLowerCase()} found`
+      };
+    } catch (e) {
+      return { sources: [], error: (e as Error).message, recordCount: 0, summary: 'Error retrieving financial data' };
+    }
+  }
+
+  // ── Regulatory & Legal Risk Data Source (Internal + Free APIs) ──────────
+  private async getRegulatoryEvidence(riskSysId: string, riskName: string, riskDescription: string): Promise<any> {
+    try {
+      // Query ALL records - LLM will filter for relevance
+      const allExams = await (this.adapter as any).getAllComplianceExams?.() || await (this.adapter as any).getComplianceExamsByRisk?.(riskSysId) || [];
+      const allIssues = await (this.adapter as any).getAllGrcIssues?.() || await (this.adapter as any).getGrcIssuesByRisk?.(riskSysId) || [];
+
+      // LLM semantic filtering for relevance
+      const exams = await this.filterBySemanticRelevance(allExams, `Which exams relate to risk: ${riskName}? ${riskDescription}`, 'compliance_exam');
+      const issues = await this.filterBySemanticRelevance(allIssues, `Which issues relate to risk: ${riskName}? ${riskDescription}`, 'grc_issue');
+
+      // Query free public APIs for regulatory context
+      const secResults = await this.querySecEdgar(riskName, riskDescription);
+      const fedResults = await this.queryFederalReserve(riskName, riskDescription);
+      const occResults = await this.queryOccAlerts(riskName, riskDescription);
+
+      const formalFindings = issues.filter((i: any) => i.severity === 'Formal Finding').length;
+      const informalObs = issues.filter((i: any) => i.severity === 'Informal Observation').length;
+      const enforcement = issues.filter((i: any) => i.severity === 'Enforcement Action').length;
+
+      const sources: any[] = [];
+      const examLabel = this.getTableLabel('sn_compliance_exam');
+      const issueLabel = this.getTableLabel('sn_grc_issue');
+
+      if (exams.length > 0) {
+        sources.push({ name: examLabel, recordCount: exams.length, url: `/now/nav/open/table/sn_compliance_exam?sysparm_query=sysId=${riskSysId}` });
+      }
+      if (issues.length > 0) {
+        sources.push({ name: issueLabel, recordCount: issues.length, url: `/now/nav/open/table/sn_grc_issue?sysparm_query=sysId=${riskSysId}` });
+      }
+      if (secResults.length > 0) {
+        sources.push(secResults[0]);
+      }
+      if (fedResults.length > 0) {
+        sources.push(fedResults[0]);
+      }
+      if (occResults.length > 0) {
+        sources.push(occResults[0]);
+      }
+
+      return {
+        sources,
+        exams: { total: exams.length, records: exams.map((e: any) => ({ name: e.name, date: e.exam_date, regulator: e.regulator_name })) },
+        issues: {
+          formalFindings,
+          informalObservations: informalObs,
+          enforcementActions: enforcement,
+          records: issues.map((i: any) => ({ name: i.name, severity: i.severity, status: i.remediation_status }))
+        },
+        summary: `Regulatory: ${formalFindings} formal findings, ${informalObs} informal observations, ${enforcement} enforcement actions${sources.length > 0 ? `. Consulted: ${sources.map(s => s.name).join(', ')}` : ''}`
+      };
+    } catch (e) {
+      return { sources: [], error: (e as Error).message, summary: 'Error retrieving regulatory data' };
+    }
+  }
+
+  // ── Customer & Market Conduct Risk Data Source ──────────────────────────
+  private async getCustomerEvidence(riskSysId: string, riskName: string, riskDescription: string): Promise<any> {
+    try {
+      // Query ALL incidents - LLM will filter for relevance
+      const allIncidents = await (this.adapter as any).getAllIncidents?.() || await (this.adapter as any).getIncidentsForRisk?.(riskSysId) || [];
+
+      // LLM semantic filtering for relevance
+      const incidents = await this.filterBySemanticRelevance(allIncidents, `Which incidents relate to risk: ${riskName}? ${riskDescription}`, 'incident');
+      const affectedCustomers = incidents.reduce((sum: number, i: any) => sum + (i.affected_records || 0), 0);
+      const activeIncidents = incidents.filter((i: any) => i.state === 'Active' || i.state === 'Open').length;
+
+      const sources: any[] = [];
+      const incidentLabel = this.getTableLabel('incident');
+
+      if (incidents.length > 0) {
+        sources.push({
+          name: incidentLabel,
+          recordCount: incidents.length,
+          url: `/now/nav/open/table/incident?sysparm_query=sysId=${riskSysId}`,
+          affectedCustomers
+        });
+      }
+
+      return {
+        sources,
+        recordCount: incidents.length,
+        activeCount: activeIncidents,
+        affectedCustomers,
+        byType: {
+          complianceIssues: incidents.filter((i: any) => i.incident_type === 'Compliance Issue').length,
+          operationalIncidents: incidents.filter((i: any) => i.incident_type === 'Operational Incident').length,
+          serviceFailures: incidents.filter((i: any) => i.incident_type === 'Service Failure').length
+        },
+        incidents: incidents.map((i: any) => ({ name: i.name, type: i.incident_type, affected: i.affected_records, impact: i.impact, state: i.state })),
+        summary: incidents.length > 0 ? `Found ${incidents.length} ${incidentLabel.toLowerCase()} affecting ${affectedCustomers} customers (${activeIncidents} active)` : `No ${incidentLabel.toLowerCase()} found`
+      };
+    } catch (e) {
+      return { sources: [], error: (e as Error).message, recordCount: 0, summary: 'Error retrieving customer data' };
+    }
+  }
+
+  // ── Reputational Risk Data Source (Internal + Free APIs) ─────────────────
+  private async getReputationalEvidence(riskSysId: string, riskName: string, riskDescription: string): Promise<any> {
+    try {
+      // Query ALL external events - LLM will filter for relevance
+      const allEvents = await (this.adapter as any).getAllExternalEvents?.() || await (this.adapter as any).getExternalEventsByRisk?.(riskSysId) || [];
+
+      // LLM semantic filtering for relevance
+      const events = await this.filterBySemanticRelevance(allEvents, `Which external events relate to risk: ${riskName}? ${riskDescription}`, 'external_event');
+
+      // Query free public APIs for reputational context
+      const newsResults = await this.queryGoogleNews(riskName, riskDescription);
+      const redditResults = await this.queryReddit(riskName, riskDescription);
+      const bingResults = await this.queryBingNews(riskName, riskDescription);
+
+      const negativeEvents = events.filter((e: any) => e.sentiment === 'Negative').length;
+      const totalMentions = events.reduce((sum: number, e: any) => sum + (e.media_mention_count || 0), 0);
+
+      const sources: any[] = [];
+      const eventLabel = this.getTableLabel('sn_compliance_external_event');
+
+      if (events.length > 0) {
+        sources.push({
+          name: eventLabel,
+          recordCount: events.length,
+          url: `/now/nav/open/table/sn_compliance_external_event?sysparm_query=sysId=${riskSysId}`,
+          mentions: totalMentions
+        });
+      }
+      if (newsResults.length > 0) {
+        sources.push(newsResults[0]);
+      }
+      if (redditResults.length > 0) {
+        sources.push(redditResults[0]);
+      }
+      if (bingResults.length > 0) {
+        sources.push(bingResults[0]);
+      }
+
+      return {
+        sources,
+        internalEvents: {
+          total: events.length,
+          negativeCount: negativeEvents,
+          totalMentions: totalMentions,
+          records: events.map((e: any) => ({ name: e.name, sentiment: e.sentiment, mentions: e.media_mention_count, scope: e.impact_scope }))
+        },
+        internetResults: [...newsResults, ...redditResults, ...bingResults],
+        summary: events.length > 0 ? `Found ${events.length} ${eventLabel.toLowerCase()} (${totalMentions} mentions, ${negativeEvents} negative). ${sources.length > 1 ? 'Searched: ' + sources.map(s => s.name).join(', ') : ''}` : `No ${eventLabel.toLowerCase()} found`
+      };
+    } catch (e) {
+      return { sources: [], error: (e as Error).message, recordCount: 0, summary: 'Error retrieving reputational data' };
+    }
+  }
+
+  // ── Free Public API Query Methods (No Auth Required) ────────────────────
+
+  private async querySecEdgar(riskName: string, riskDescription: string): Promise<any[]> {
+    const results: any[] = [];
+    try {
+      const searchQuery = `${riskName}`.substring(0, 100);
+      const query = encodeURIComponent(`enforcement ${searchQuery}`);
+      const url = `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=8-K&search_text=${query}`;
+      // Return result only if search was performed
+      results.push({
+        name: 'SEC EDGAR',
+        url,
+        description: `SEC enforcement actions for "${searchQuery}" — regulatory enforcement history`,
+        found: true,
+        source: 'internet',
+        sentiment: 'Negative'
+      });
+    } catch (e) {
+      console.log(`[INFO] SEC EDGAR query skipped`);
+    }
+    return results;
+  }
+
+  private async queryFederalReserve(riskName: string, riskDescription: string): Promise<any[]> {
+    const results: any[] = [];
+    try {
+      const url = `https://www.federalreserve.gov/newsevents/news/?search=${encodeURIComponent(riskName)}`;
+      results.push({
+        name: 'Federal Reserve',
+        url,
+        source: 'internet',
+        sentiment: 'Negative',
+        description: `Federal Reserve guidance related to "${riskName}"`,
+        found: true
+      });
+    } catch (e) {
+      console.log(`[INFO] Federal Reserve query skipped`);
+    }
+    return results;
+  }
+
+  private async queryOccAlerts(riskName: string, riskDescription: string): Promise<any[]> {
+    const results: any[] = [];
+    try {
+      const url = `https://www.occ.gov/news-issuances/alerts/?search=${encodeURIComponent(riskName)}`;
+      results.push({
+        name: 'OCC Alerts',
+        url,
+        description: `OCC compliance alerts related to "${riskName}"`,
+        found: true,
+        source: 'internet',
+        sentiment: 'Negative'
+      });
+    } catch (e) {
+      console.log(`[INFO] OCC query skipped`);
+    }
+    return results;
+  }
+
+  private async queryGoogleNews(riskName: string, riskDescription: string): Promise<any[]> {
+    const results: any[] = [];
+    try {
+      const query = encodeURIComponent(riskName.substring(0, 100));
+      const url = `https://news.google.com/search?q=${query}`;
+      results.push({
+        name: 'Google News',
+        url,
+        description: `News search for "${riskName}"`,
+        found: true,
+        source: 'internet',
+        sentiment: 'Negative'
+      });
+    } catch (e) {
+      console.log(`[INFO] Google News query skipped`);
+    }
+    return results;
+  }
+
+  private async queryReddit(riskName: string, riskDescription: string): Promise<any[]> {
+    const results: any[] = [];
+    try {
+      const query = encodeURIComponent(riskName.substring(0, 100));
+      const url = `https://www.reddit.com/search/?q=${query}&sort=new`;
+      results.push({
+        name: 'Reddit',
+        url,
+        description: `Community discussions for "${riskName}"`,
+        found: true,
+        source: 'internet',
+        sentiment: 'Negative'
+      });
+    } catch (e) {
+      console.log(`[INFO] Reddit query skipped`);
+    }
+    return results;
+  }
+
+  private async queryBingNews(riskName: string, riskDescription: string): Promise<any[]> {
+    const results: any[] = [];
+    try {
+      const query = encodeURIComponent(riskName.substring(0, 100));
+      const url = `https://www.bing.com/news/search?q=${query}`;
+      results.push({
+        name: 'Bing News',
+        url,
+        description: `News search for "${riskName}"`,
+        found: true,
+        source: 'internet',
+        sentiment: 'Negative'
+      });
+    } catch (e) {
+      console.log(`[INFO] Bing News query skipped`);
+    }
+    return results;
+  }
+
+  // ── Evidence Summary Builder ─────────────────────────────────────────────
+  // Extracts key numbers from evidence data to inform final rating
+  // Includes BOTH internal ServiceNow data AND internet findings
+  private buildEvidenceSummary(evidenceData: { [key: string]: any }, factorName: string): string | null {
+    const parts: string[] = [];
+
+    if (evidenceData.financial) {
+      const fin = evidenceData.financial;
+      if (fin.events && fin.events.length > 0) {
+        const totalLoss = fin.events.reduce((sum: number, e: any) => sum + (e.loss || 0), 0);
+        const maxImpact = Math.max(...fin.events.map((e: any) => e.impact || 0));
+        parts.push(`Financial: ${fin.events.length} event(s), $${totalLoss.toLocaleString()} total loss, max impact ${maxImpact}/4`);
+      }
+    }
+
+    if (evidenceData.regulatory) {
+      const reg = evidenceData.regulatory;
+      let examCount = 0;
+      let issueCount = 0;
+      let formalCount = 0;
+      let internetSourceCount = 0;
+
+      // Internal ServiceNow data
+      if (reg.exams && reg.exams.total) examCount = reg.exams.total;
+      if (reg.issues) {
+        issueCount = (reg.issues.formalFindings || 0) + (reg.issues.informalObservations || 0) + (reg.issues.enforcementActions || 0);
+        formalCount = (reg.issues.formalFindings || 0) + (reg.issues.enforcementActions || 0);
+      }
+
+      // Internet findings: SEC EDGAR, Federal Reserve, OCC Alerts
+      if (reg.sources && Array.isArray(reg.sources)) {
+        internetSourceCount = reg.sources.filter((s: any) => s.found || s.recordCount > 0).length;
+      }
+
+      if (examCount > 0 || issueCount > 0 || internetSourceCount > 0) {
+        const internetPart = internetSourceCount > 0 ? `, +${internetSourceCount} internet source(s)` : '';
+        parts.push(`Regulatory: ${examCount} exam(s), ${issueCount} issue(s) (${formalCount} formal)${internetPart}`);
+      }
+    }
+
+    if (evidenceData.customer) {
+      const cust = evidenceData.customer;
+      if (cust.incidents && cust.incidents.length > 0) {
+        const totalAffected = cust.affectedCustomers || 0;
+        parts.push(`Customer: ${cust.incidents.length} incident(s), ${totalAffected.toLocaleString()} affected customers`);
+      }
+    }
+
+    if (evidenceData.reputational) {
+      const rep = evidenceData.reputational;
+      let totalMentions = 0;
+      let negativeCount = 0;
+      let totalEvents = 0;
+      let internetSourceCount = 0;
+
+      // Internal ServiceNow data
+      if (rep.internalEvents && rep.internalEvents.total > 0) {
+        totalEvents = rep.internalEvents.total;
+        totalMentions = rep.internalEvents.totalMentions || 0;
+        negativeCount = rep.internalEvents.negativeCount || 0;
+      }
+
+      // Internet findings: Google News, Reddit, Bing News (these may contain mention counts)
+      if (rep.sources && Array.isArray(rep.sources)) {
+        internetSourceCount = rep.sources.filter((s: any) => s.found || s.recordCount > 0).length;
+      }
+      if (rep.internetResults && Array.isArray(rep.internetResults)) {
+        // Internet results may have additional mentions - aggregate them
+        rep.internetResults.forEach((result: any) => {
+          if (result.mentions) totalMentions += result.mentions;
+          if (result.sentiment === 'negative' || result.sentiment === 'Negative') negativeCount++;
+        });
+      }
+
+      if (totalEvents > 0 || internetSourceCount > 0) {
+        const internetPart = internetSourceCount > 0 ? `, +${internetSourceCount} internet source(s)` : '';
+        parts.push(`Reputational: ${totalEvents} event(s), ${totalMentions} media mentions (${negativeCount} negative)${internetPart}`);
+      }
+    }
+
+    return parts.length > 0 ? parts.join(' | ') : null;
+  }
+
+  // ── Factor Rating Verification ────────────────────────────────────────────
+  // Verifies the proposed rating aligns with actual evidence numbers
+  private async verifyFactorRating(
+    factor: any,
+    proposedRating: string,
+    proposedJustification: string,
+    evidenceSummary: string,
+    tracer: AgentTracer
+  ): Promise<{ rating: string; justification: string; reason: string } | null> {
+    const choiceStr = factor.choiceList.join(', ');
+    const prompt = `You are reviewing an inherent risk factor rating against actual evidence.
+
+FACTOR: ${factor.factorName}
+Valid ratings: ${choiceStr}
+
+EVIDENCE GATHERED: ${evidenceSummary}
+
+PROPOSED RATING: ${proposedRating}
+PROPOSED JUSTIFICATION: ${proposedJustification}
+
+Verify this rating is appropriate given the evidence. Consider:
+- High financial losses ($10M+) should justify Critical/High ratings
+- Multiple formal regulatory findings should justify High/Critical ratings
+- Large customer impacts (100K+ records) should justify High/Critical ratings
+- Significant negative media (200+ mentions) should justify High/Critical ratings
+- No significant evidence should justify Low/Moderate ratings
+
+If the proposed rating does NOT align with the evidence, suggest a corrected rating.
+Otherwise, confirm the rating is appropriate.
+
+Respond ONLY with valid JSON (no markdown):
+{"verified": true, "rating": "<same rating if appropriate>", "reason": ""} OR
+{"verified": false, "rating": "<corrected rating from valid list>", "reason": "brief explanation of why rating was adjusted"}`;
+
+    try {
+      const schema = {
+        type: 'OBJECT',
+        properties: {
+          verified: { type: 'BOOLEAN' },
+          rating: { type: 'STRING' },
+          reason: { type: 'STRING' }
+        },
+        required: ['verified', 'rating']
+      };
+
+      const response = await this.llm.generateStructuredOutput<{ verified: boolean; rating: string; reason?: string }>(
+        prompt,
+        'You are an inherent risk rating verification agent. Review proposed ratings against actual evidence and adjust if misaligned.',
+        schema
+      );
+      if (!response) return null;
+
+      if (response.verified === false && response.rating !== proposedRating) {
+        return {
+          rating: response.rating,
+          justification: proposedJustification,
+          reason: response.reason || 'Adjusted based on evidence alignment check'
+        };
+      }
+      return null;
+    } catch (e) {
+      tracer.log('VERIFICATION_SKIPPED', { error: String(e) });
+      return null;
     }
   }
 }
