@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { BaseGRCAdapter } from '../adapters/base';
 import { BaseLLMClient, ToolDeclaration } from '../llm/llm_client';
 import { Risk, Control, TestEvidence, Factor } from './models';
@@ -1223,14 +1224,18 @@ export class InherentAssessmentAgent {
             const examCount = reg?.exams?.total || 0;
             const findingCount = (reg?.issues?.formalFindings || 0) + (reg?.issues?.enforcementActions || 0);
             const obsCount = reg?.issues?.informalObservations || 0;
+            const secSource = reg?.sources?.find((s: any) => s.name === 'SEC EDGAR');
+            const secLabel = secSource?.description || `SEC EDGAR 8-K Search for ${risk.name}`;
+            const secUrl = secSource?.url || `https://www.sec.gov/edgar/search/#/q=${riskQuery}&forms=8-K`;
+
             whatSearchedLines.push(`  ${searchNumber}. Regulatory Evidence — searched ${this.getTableLabel('sn_compliance_exam')} and ${this.getTableLabel('sn_grc_issue')}; found ${examCount} exam(s), ${findingCount} formal finding(s)/order(s), and ${obsCount} informal observation(s)`);
             whatSearchedLines.push(`  ${searchNumber + 1}. Regulatory Sources & URLs Impacting Rating:`);
-            whatSearchedLines.push(`     • SEC EDGAR: https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=8-K&search_text=enforcement%20${riskQuery}`);
-            whatSearchedLines.push(`     • Federal Reserve: https://www.federalreserve.gov/newsevents/news/?search=${riskQuery}`);
-            whatSearchedLines.push(`     • OCC Alerts: https://www.occ.gov/news-issuances/alerts/?search=${riskQuery}`);
+            whatSearchedLines.push(`     • SEC EDGAR: ${secLabel} — ${secUrl}`);
+            whatSearchedLines.push(`     • Federal Reserve: https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search`);
+            whatSearchedLines.push(`     • OCC: https://apps.occ.gov/EASearch`);
 
             auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Regulatory evidence — searched <a href="/now/nav/open/table/sn_compliance_exam" target="_blank">${this.getTableLabel('sn_compliance_exam')}</a> and <a href="/now/nav/open/table/sn_grc_issue" target="_blank">${this.getTableLabel('sn_grc_issue')}</a> (${examCount} exams, ${findingCount} formal findings)`);
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Regulatory URLs — <a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=8-K&search_text=enforcement%20${riskQuery}" target="_blank">SEC EDGAR</a> | <a href="https://www.federalreserve.gov/newsevents/news/?search=${riskQuery}" target="_blank">Federal Reserve</a> | <a href="https://www.occ.gov/news-issuances/alerts/?search=${riskQuery}" target="_blank">OCC Alerts</a>`);
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Regulatory URLs — <a href="${secUrl}" target="_blank">SEC EDGAR: ${htmlEscape(secLabel)}</a> | <a href="https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search" target="_blank">Federal Reserve Enforcement Actions</a> | <a href="https://apps.occ.gov/EASearch" target="_blank">OCC Enforcement Actions</a>`);
             searchNumber += 2;
           }
           if (toolCall.name === 'get_customer_evidence') {
@@ -1245,14 +1250,18 @@ export class InherentAssessmentAgent {
             const rep = draft.evidenceData?.reputational;
             const eventCount = rep?.internalEvents?.total || 0;
             const mentions = rep?.internalEvents?.totalMentions || 0;
+            const gNews = rep?.internetResults?.find((r: any) => r.name === 'Google News');
+            const gNewsTitle = gNews?.title || `News search: ${risk.name}`;
+            const gNewsUrl = gNews?.url || `https://news.google.com/search?q=${riskQuery}`;
+
             whatSearchedLines.push(`  ${searchNumber}. Reputational Evidence — searched ${this.getTableLabel('sn_compliance_external_event')}; found ${eventCount} event(s) with ${mentions.toLocaleString()} media mention(s)`);
             whatSearchedLines.push(`  ${searchNumber + 1}. Internet Sources & Articles Impacting Rating:`);
-            whatSearchedLines.push(`     • Google News: https://news.google.com/search?q=${riskQuery}`);
+            whatSearchedLines.push(`     • Google News: "${gNewsTitle}" — ${gNewsUrl}`);
             whatSearchedLines.push(`     • Reddit: https://www.reddit.com/search/?q=${riskQuery}&sort=new`);
             whatSearchedLines.push(`     • Bing News: https://www.bing.com/news/search?q=${riskQuery}`);
 
             auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Reputational events — searched <a href="/now/nav/open/table/sn_compliance_external_event" target="_blank">${this.getTableLabel('sn_compliance_external_event')}</a> (${eventCount} events, ${mentions} mentions)`);
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Internet Search URLs — <a href="https://news.google.com/search?q=${riskQuery}" target="_blank">Google News</a> | <a href="https://www.reddit.com/search/?q=${riskQuery}&sort=new" target="_blank">Reddit</a> | <a href="https://www.bing.com/news/search?q=${riskQuery}" target="_blank">Bing News</a>`);
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Internet Search URLs — <a href="${gNewsUrl}" target="_blank">Google News: ${htmlEscape(gNewsTitle)}</a> | <a href="https://www.reddit.com/search/?q=${riskQuery}&sort=new" target="_blank">Reddit</a> | <a href="https://www.bing.com/news/search?q=${riskQuery}" target="_blank">Bing News</a>`);
             searchNumber += 2;
           }
         }
@@ -1817,8 +1826,8 @@ export class InherentAssessmentAgent {
   // ── Financial Risk Data Source ──────────────────────────────────────────
   private async getFinancialEvidence(riskSysId: string, riskName: string, riskDescription: string): Promise<any> {
     try {
-      // Query ALL financial events - LLM will filter for relevance
-      const allEvents = await (this.adapter as any).getAllFinancialRiskEvents?.() || await (this.adapter as any).getFinancialRiskEvents?.(riskSysId) || [];
+      // Prioritize risk-linked records; fallback to all records if none linked
+      const allEvents = await (this.adapter as any).getFinancialRiskEvents?.(riskSysId) || await (this.adapter as any).getAllFinancialRiskEvents?.() || [];
 
       // LLM semantic filtering for relevance
       const events = await this.filterBySemanticRelevance(allEvents, `Which financial events relate to risk: ${riskName}? Description: ${riskDescription}`, 'financial_event');
@@ -1851,9 +1860,9 @@ export class InherentAssessmentAgent {
   // ── Regulatory & Legal Risk Data Source (Internal + Free APIs) ──────────
   private async getRegulatoryEvidence(riskSysId: string, riskName: string, riskDescription: string): Promise<any> {
     try {
-      // Query ALL records - LLM will filter for relevance
-      const allExams = await (this.adapter as any).getAllComplianceExams?.() || await (this.adapter as any).getComplianceExamsByRisk?.(riskSysId) || [];
-      const allIssues = await (this.adapter as any).getAllGrcIssues?.() || await (this.adapter as any).getGrcIssuesByRisk?.(riskSysId) || [];
+      // Prioritize risk-linked records; fallback to all records if none linked
+      const allExams = await (this.adapter as any).getComplianceExams?.(riskSysId) || await (this.adapter as any).getAllComplianceExams?.() || [];
+      const allIssues = await (this.adapter as any).getGrcIssues?.(riskSysId) || await (this.adapter as any).getAllGrcIssues?.() || [];
 
       // LLM semantic filtering for relevance
       const exams = await this.filterBySemanticRelevance(allExams, `Which exams relate to risk: ${riskName}? ${riskDescription}`, 'compliance_exam');
@@ -1907,8 +1916,8 @@ export class InherentAssessmentAgent {
   // ── Customer & Market Conduct Risk Data Source ──────────────────────────
   private async getCustomerEvidence(riskSysId: string, riskName: string, riskDescription: string): Promise<any> {
     try {
-      // Query ALL incidents - LLM will filter for relevance
-      const allIncidents = await (this.adapter as any).getAllIncidents?.() || await (this.adapter as any).getIncidentsForRisk?.(riskSysId) || [];
+      // Prioritize risk-linked records; fallback to all records if none linked
+      const allIncidents = await (this.adapter as any).getIncidents?.(riskSysId) || await (this.adapter as any).getAllIncidents?.() || [];
 
       // LLM semantic filtering for relevance
       const incidents = await this.filterBySemanticRelevance(allIncidents, `Which incidents relate to risk: ${riskName}? ${riskDescription}`, 'incident');
@@ -1948,8 +1957,8 @@ export class InherentAssessmentAgent {
   // ── Reputational Risk Data Source (Internal + Free APIs) ─────────────────
   private async getReputationalEvidence(riskSysId: string, riskName: string, riskDescription: string): Promise<any> {
     try {
-      // Query ALL external events - LLM will filter for relevance
-      const allEvents = await (this.adapter as any).getAllExternalEvents?.() || await (this.adapter as any).getExternalEventsByRisk?.(riskSysId) || [];
+      // Prioritize risk-linked records; fallback to all records if none linked
+      const allEvents = await (this.adapter as any).getExternalEvents?.(riskSysId) || await (this.adapter as any).getAllExternalEvents?.() || [];
 
       // LLM semantic filtering for relevance
       const events = await this.filterBySemanticRelevance(allEvents, `Which external events relate to risk: ${riskName}? ${riskDescription}`, 'external_event');
@@ -1999,119 +2008,158 @@ export class InherentAssessmentAgent {
     }
   }
 
-  // ── Free Public API Query Methods (No Auth Required) ────────────────────
+  // ── Free Public API Query Methods (Live Web Search) ────────────────────
 
   private async querySecEdgar(riskName: string, riskDescription: string): Promise<any[]> {
     const results: any[] = [];
     try {
       const searchQuery = `${riskName}`.substring(0, 100);
-      const query = encodeURIComponent(`enforcement ${searchQuery}`);
-      const url = `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=8-K&search_text=${query}`;
-      // Return result only if search was performed
+      const apiEndpoint = `https://efts.sec.gov/LATEST/search-index?q=${encodeURIComponent(searchQuery)}&forms=8-K`;
+      const webUrl = `https://www.sec.gov/edgar/search/#/q=${encodeURIComponent(searchQuery)}&forms=8-K`;
+      const res = await axios.get(apiEndpoint, {
+        headers: { 'User-Agent': 'EmaRiskAgent/1.0 (compliance@wissda.com)' },
+        timeout: 4000
+      });
+      const hits = res.data?.hits?.hits || [];
+      if (hits.length > 0) {
+        const top = hits[0]._source;
+        const entity = top?.display_names?.[0] || top?.entity_name || 'Regulatory Disclosures';
+        const fileDate = top?.file_date || '';
+        results.push({
+          name: 'SEC EDGAR',
+          url: webUrl,
+          title: `Form 8-K: ${entity} (${fileDate})`,
+          description: `SEC 8-K regulatory disclosure on "${searchQuery}" — ${entity} (${fileDate})`,
+          found: true,
+          source: 'internet',
+          sentiment: 'Negative'
+        });
+      } else {
+        results.push({
+          name: 'SEC EDGAR',
+          url: webUrl,
+          title: `SEC Enforcement Search: ${searchQuery}`,
+          description: `SEC EDGAR enforcement search for "${searchQuery}"`,
+          found: true,
+          source: 'internet',
+          sentiment: 'Neutral'
+        });
+      }
+    } catch (e) {
+      const webUrl = `https://www.sec.gov/edgar/search/#/q=${encodeURIComponent(riskName)}&forms=8-K`;
       results.push({
         name: 'SEC EDGAR',
-        url,
-        description: `SEC enforcement actions for "${searchQuery}" — regulatory enforcement history`,
+        url: webUrl,
+        title: `SEC Full-Text Search: ${riskName}`,
+        description: `SEC EDGAR search for "${riskName}"`,
         found: true,
         source: 'internet',
         sentiment: 'Negative'
       });
-    } catch (e) {
-      console.log(`[INFO] SEC EDGAR query skipped`);
     }
     return results;
   }
 
   private async queryFederalReserve(riskName: string, riskDescription: string): Promise<any[]> {
     const results: any[] = [];
-    try {
-      const url = `https://www.federalreserve.gov/newsevents/news/?search=${encodeURIComponent(riskName)}`;
-      results.push({
-        name: 'Federal Reserve',
-        url,
-        source: 'internet',
-        sentiment: 'Negative',
-        description: `Federal Reserve guidance related to "${riskName}"`,
-        found: true
-      });
-    } catch (e) {
-      console.log(`[INFO] Federal Reserve query skipped`);
-    }
+    const url = 'https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search';
+    results.push({
+      name: 'Federal Reserve',
+      url,
+      title: 'Federal Reserve Enforcement Actions Portal',
+      source: 'internet',
+      sentiment: 'Negative',
+      description: `Federal Reserve enforcement actions database for "${riskName}"`,
+      found: true
+    });
     return results;
   }
 
   private async queryOccAlerts(riskName: string, riskDescription: string): Promise<any[]> {
     const results: any[] = [];
-    try {
-      const url = `https://www.occ.gov/news-issuances/alerts/?search=${encodeURIComponent(riskName)}`;
-      results.push({
-        name: 'OCC Alerts',
-        url,
-        description: `OCC compliance alerts related to "${riskName}"`,
-        found: true,
-        source: 'internet',
-        sentiment: 'Negative'
-      });
-    } catch (e) {
-      console.log(`[INFO] OCC query skipped`);
-    }
+    const url = 'https://apps.occ.gov/EASearch';
+    results.push({
+      name: 'OCC Alerts',
+      url,
+      title: 'OCC Enforcement Actions Search Portal',
+      description: `OCC enforcement actions database for "${riskName}"`,
+      found: true,
+      source: 'internet',
+      sentiment: 'Negative'
+    });
     return results;
   }
 
   private async queryGoogleNews(riskName: string, riskDescription: string): Promise<any[]> {
     const results: any[] = [];
     try {
-      const query = encodeURIComponent(riskName.substring(0, 100));
-      const url = `https://news.google.com/search?q=${query}`;
+      const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(riskName)}&hl=en-US&gl=US&ceid=US:en`;
+      const res = await axios.get(rssUrl, { timeout: 4000 });
+      const items = res.data.match(/<item>[\s\S]*?<\/item>/g) || [];
+      if (items.length > 0) {
+        const title = items[0].match(/<title>(.*?)<\/title>/)?.[1] || riskName;
+        const link = items[0].match(/<link>(.*?)<\/link>/)?.[1] || items[0].match(/<link\/>(.*?)/)?.[1] || `https://news.google.com/search?q=${encodeURIComponent(riskName)}`;
+        results.push({
+          name: 'Google News',
+          url: link,
+          title: title.replace(/&amp;/g, '&').replace(/&quot;/g, '"'),
+          description: `Top News: "${title.replace(/&amp;/g, '&')}"`,
+          found: true,
+          source: 'internet',
+          sentiment: 'Negative'
+        });
+      } else {
+        results.push({
+          name: 'Google News',
+          url: `https://news.google.com/search?q=${encodeURIComponent(riskName)}`,
+          title: `News Search: ${riskName}`,
+          description: `News search for "${riskName}"`,
+          found: true,
+          source: 'internet',
+          sentiment: 'Negative'
+        });
+      }
+    } catch (e) {
       results.push({
         name: 'Google News',
-        url,
+        url: `https://news.google.com/search?q=${encodeURIComponent(riskName)}`,
+        title: `News Search: ${riskName}`,
         description: `News search for "${riskName}"`,
         found: true,
         source: 'internet',
         sentiment: 'Negative'
       });
-    } catch (e) {
-      console.log(`[INFO] Google News query skipped`);
     }
     return results;
   }
 
   private async queryReddit(riskName: string, riskDescription: string): Promise<any[]> {
     const results: any[] = [];
-    try {
-      const query = encodeURIComponent(riskName.substring(0, 100));
-      const url = `https://www.reddit.com/search/?q=${query}&sort=new`;
-      results.push({
-        name: 'Reddit',
-        url,
-        description: `Community discussions for "${riskName}"`,
-        found: true,
-        source: 'internet',
-        sentiment: 'Negative'
-      });
-    } catch (e) {
-      console.log(`[INFO] Reddit query skipped`);
-    }
+    const url = `https://www.reddit.com/search/?q=${encodeURIComponent(riskName)}&sort=new`;
+    results.push({
+      name: 'Reddit',
+      url,
+      title: `Reddit Discussion Search: ${riskName}`,
+      description: `Community discussions for "${riskName}"`,
+      found: true,
+      source: 'internet',
+      sentiment: 'Negative'
+    });
     return results;
   }
 
   private async queryBingNews(riskName: string, riskDescription: string): Promise<any[]> {
     const results: any[] = [];
-    try {
-      const query = encodeURIComponent(riskName.substring(0, 100));
-      const url = `https://www.bing.com/news/search?q=${query}`;
-      results.push({
-        name: 'Bing News',
-        url,
-        description: `News search for "${riskName}"`,
-        found: true,
-        source: 'internet',
-        sentiment: 'Negative'
-      });
-    } catch (e) {
-      console.log(`[INFO] Bing News query skipped`);
-    }
+    const url = `https://www.bing.com/news/search?q=${encodeURIComponent(riskName)}`;
+    results.push({
+      name: 'Bing News',
+      url,
+      title: `Bing News Search: ${riskName}`,
+      description: `News search for "${riskName}"`,
+      found: true,
+      source: 'internet',
+      sentiment: 'Negative'
+    });
     return results;
   }
 

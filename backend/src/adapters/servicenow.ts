@@ -1766,119 +1766,214 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
     }
   }
 
-  // ── Query ALL records (no risk_id linking required) ─────────────────────
-  // InherentAssessmentAgent uses these to query complete tables, then uses
-  // LLM semantic filtering to identify records relevant to the specific risk.
+  // ── Prioritized Queries: Risk Reference First, Fallback to ALL Records ──
+  // 1. If riskSysId is provided, query for records directly referencing the risk (u_risk, risk, item, risk_reference).
+  // 2. If no direct records exist, query ALL records and let LLM semantic relevance filter identify related records.
 
-  async getAllFinancialRiskEvents(): Promise<any[]> {
+  private mapFinancialEventRow(r: any): any {
+    return {
+      sys_id: getValue(r.sys_id),
+      name: getDisplayValue(r.name) || getDisplayValue(r.description),
+      description: getDisplayValue(r.description),
+      expected_loss: parseFloat(getValue(r.expected_loss)) || 0,
+      impact: parseInt(getValue(r.impact), 10) || 0,
+      discovered_on: getDisplayValue(r.discovered_on)
+    };
+  }
+
+  async getFinancialRiskEvents(riskSysId?: string): Promise<any[]> {
     if (!this.useLive) return [];
+    const fields = 'sys_id,name,expected_loss,impact,discovered_on,description,risk_reference,u_risk,risk';
     try {
+      if (riskSysId) {
+        const directRows = await this.queryTable<any>('sn_risk_advanced_event', {
+          sysparm_fields: fields,
+          sysparm_query: `risk_reference=${riskSysId}^ORu_risk=${riskSysId}^ORrisk=${riskSysId}^ORDERBYDESCsys_created_on`,
+          sysparm_limit: '100'
+        });
+        if (directRows && directRows.length > 0) {
+          return directRows.map(r => this.mapFinancialEventRow(r));
+        }
+      }
       const rows = await this.queryTable<any>('sn_risk_advanced_event', {
-        sysparm_fields: 'sys_id,name,expected_loss,impact,discovered_on,description',
+        sysparm_fields: fields,
         sysparm_query: 'ORDERBYDESCsys_created_on',
         sysparm_limit: '100'
       });
-      return (rows || []).map(r => ({
-        sys_id: getValue(r.sys_id),
-        name: getDisplayValue(r.name) || getDisplayValue(r.description),
-        description: getDisplayValue(r.description),
-        expected_loss: parseFloat(getValue(r.expected_loss)) || 0,
-        impact: parseInt(getValue(r.impact), 10) || 0,
-        discovered_on: getDisplayValue(r.discovered_on)
-      }));
+      return (rows || []).map(r => this.mapFinancialEventRow(r));
+    } catch {
+      return [];
+    }
+  }
+
+  async getAllFinancialRiskEvents(): Promise<any[]> {
+    return this.getFinancialRiskEvents();
+  }
+
+  private mapComplianceExamRow(r: any): any {
+    return {
+      sys_id: getValue(r.sys_id),
+      name: getDisplayValue(r.u_name) || getDisplayValue(r.name),
+      description: getDisplayValue(r.u_description) || getDisplayValue(r.description),
+      exam_date: getDisplayValue(r.u_exam_date) || getDisplayValue(r.exam_date),
+      regulator_name: getDisplayValue(r.u_regulator_name) || getDisplayValue(r.regulator_name),
+      formal_findings: parseInt(getValue(r.u_formal_findings), 10) || 0,
+      informal_observations: parseInt(getValue(r.u_informal_observations), 10) || 0,
+      status: getDisplayValue(r.u_status) || getDisplayValue(r.status)
+    };
+  }
+
+  async getComplianceExams(riskSysId?: string): Promise<any[]> {
+    if (!this.useLive) return [];
+    const fields = 'sys_id,name,u_name,exam_date,u_exam_date,regulator_name,u_regulator_name,type,u_status,status,u_formal_findings,u_informal_observations,u_description,description,u_risk,risk';
+    try {
+      if (riskSysId) {
+        const directRows = await this.queryTable<any>('sn_compliance_exam', {
+          sysparm_fields: fields,
+          sysparm_query: `u_risk=${riskSysId}^ORrisk=${riskSysId}^ORDERBYDESCsys_created_on`,
+          sysparm_limit: '100'
+        });
+        if (directRows && directRows.length > 0) {
+          return directRows.map(r => this.mapComplianceExamRow(r));
+        }
+      }
+      const rows = await this.queryTable<any>('sn_compliance_exam', {
+        sysparm_fields: fields,
+        sysparm_query: 'ORDERBYDESCsys_created_on',
+        sysparm_limit: '100'
+      });
+      return (rows || []).map(r => this.mapComplianceExamRow(r));
     } catch {
       return [];
     }
   }
 
   async getAllComplianceExams(): Promise<any[]> {
+    return this.getComplianceExams();
+  }
+
+  private mapGrcIssueRow(r: any): any {
+    return {
+      sys_id: getValue(r.sys_id),
+      name: getDisplayValue(r.short_description) || getDisplayValue(r.name),
+      description: getDisplayValue(r.description) || getDisplayValue(r.short_description),
+      severity: getDisplayValue(r.severity) || getDisplayValue(r.priority),
+      remediation_status: getDisplayValue(r.remediation_status) || getDisplayValue(r.state),
+      due_date: getDisplayValue(r.due_date)
+    };
+  }
+
+  async getGrcIssues(riskSysId?: string): Promise<any[]> {
     if (!this.useLive) return [];
+    const fields = 'sys_id,name,short_description,severity,remediation_status,due_date,description,priority,state,item,u_risk,risk';
     try {
-      const rows = await this.queryTable<any>('sn_compliance_exam', {
-        sysparm_fields: 'sys_id,name,u_name,exam_date,u_exam_date,regulator_name,u_regulator_name,type,u_status,status,u_formal_findings,u_informal_observations,u_description,description',
+      if (riskSysId) {
+        const directRows = await this.queryTable<any>('sn_grc_issue', {
+          sysparm_fields: fields,
+          sysparm_query: `item=${riskSysId}^ORu_risk=${riskSysId}^ORrisk=${riskSysId}^ORDERBYDESCsys_created_on`,
+          sysparm_limit: '100'
+        });
+        if (directRows && directRows.length > 0) {
+          return directRows.map(r => this.mapGrcIssueRow(r));
+        }
+      }
+      const rows = await this.queryTable<any>('sn_grc_issue', {
+        sysparm_fields: fields,
         sysparm_query: 'ORDERBYDESCsys_created_on',
         sysparm_limit: '100'
       });
-      return (rows || []).map(r => ({
-        sys_id: getValue(r.sys_id),
-        name: getDisplayValue(r.u_name) || getDisplayValue(r.name),
-        description: getDisplayValue(r.u_description) || getDisplayValue(r.description),
-        exam_date: getDisplayValue(r.u_exam_date) || getDisplayValue(r.exam_date),
-        regulator_name: getDisplayValue(r.u_regulator_name) || getDisplayValue(r.regulator_name),
-        formal_findings: parseInt(getValue(r.u_formal_findings), 10) || 0,
-        informal_observations: parseInt(getValue(r.u_informal_observations), 10) || 0,
-        status: getDisplayValue(r.u_status) || getDisplayValue(r.status)
-      }));
+      return (rows || []).map(r => this.mapGrcIssueRow(r));
     } catch {
       return [];
     }
   }
 
   async getAllGrcIssues(): Promise<any[]> {
+    return this.getGrcIssues();
+  }
+
+  private mapIncidentRow(r: any): any {
+    return {
+      sys_id: getValue(r.sys_id),
+      name: `${getDisplayValue(r.number)}: ${getDisplayValue(r.short_description)}`.trim(),
+      short_description: getDisplayValue(r.short_description),
+      description: getDisplayValue(r.description),
+      incident_type: getDisplayValue(r.incident_type) || getDisplayValue(r.u_type) || getDisplayValue(r.category),
+      affected_records: parseInt(getValue(r.affected_records), 10) || 0,
+      impact: getDisplayValue(r.impact),
+      state: getDisplayValue(r.state)
+    };
+  }
+
+  async getIncidents(riskSysId?: string): Promise<any[]> {
     if (!this.useLive) return [];
+    const fields = 'sys_id,number,short_description,description,incident_type,u_type,category,affected_records,impact,state,severity';
     try {
-      const rows = await this.queryTable<any>('sn_grc_issue', {
-        sysparm_fields: 'sys_id,name,short_description,severity,remediation_status,due_date,description,priority,state',
+      if (riskSysId) {
+        const directRows = await this.queryTable<any>('incident', {
+          sysparm_fields: fields,
+          sysparm_query: `cmdb_ci=${riskSysId}^ORu_risk=${riskSysId}^ORDERBYDESCsys_created_on`,
+          sysparm_limit: '100'
+        });
+        if (directRows && directRows.length > 0) {
+          return directRows.map(r => this.mapIncidentRow(r));
+        }
+      }
+      const rows = await this.queryTable<any>('incident', {
+        sysparm_fields: fields,
         sysparm_query: 'ORDERBYDESCsys_created_on',
         sysparm_limit: '100'
       });
-      return (rows || []).map(r => ({
-        sys_id: getValue(r.sys_id),
-        name: getDisplayValue(r.short_description) || getDisplayValue(r.name),
-        description: getDisplayValue(r.description) || getDisplayValue(r.short_description),
-        severity: getDisplayValue(r.severity) || getDisplayValue(r.priority),
-        remediation_status: getDisplayValue(r.remediation_status) || getDisplayValue(r.state),
-        due_date: getDisplayValue(r.due_date)
-      }));
+      return (rows || []).map(r => this.mapIncidentRow(r));
     } catch {
       return [];
     }
   }
 
   async getAllIncidents(): Promise<any[]> {
+    return this.getIncidents();
+  }
+
+  private mapExternalEventRow(r: any): any {
+    return {
+      sys_id: getValue(r.sys_id),
+      name: getDisplayValue(r.u_name) || getDisplayValue(r.name),
+      event_date: getDisplayValue(r.u_event_date) || getDisplayValue(r.event_date),
+      event_type: getDisplayValue(r.u_event_type) || getDisplayValue(r.event_type),
+      sentiment: getDisplayValue(r.u_sentiment) || getDisplayValue(r.sentiment),
+      media_mention_count: parseInt(getValue(r.u_media_mention) || getValue(r.media_mention_count), 10) || 0,
+      impact_scope: getDisplayValue(r.u_impact_scope) || getDisplayValue(r.impact_scope),
+      duration_days: parseInt(getValue(r.u_duration_days) || getValue(r.duration_days), 10) || 0,
+      status: getDisplayValue(r.u_status) || getDisplayValue(r.status)
+    };
+  }
+
+  async getExternalEvents(riskSysId?: string): Promise<any[]> {
     if (!this.useLive) return [];
+    const fields = 'sys_id,name,u_name,event_date,u_event_date,event_type,u_event_type,sentiment,u_sentiment,media_mention_count,u_media_mention,impact_scope,u_impact_scope,duration_days,u_duration_days,status,u_status,u_risk,risk';
     try {
-      const rows = await this.queryTable<any>('incident', {
-        sysparm_fields: 'sys_id,number,short_description,description,incident_type,u_type,category,affected_records,impact,state,severity',
+      if (riskSysId) {
+        const directRows = await this.queryTable<any>('sn_compliance_external_event', {
+          sysparm_fields: fields,
+          sysparm_query: `u_risk=${riskSysId}^ORrisk=${riskSysId}^ORDERBYDESCsys_created_on`,
+          sysparm_limit: '100'
+        });
+        if (directRows && directRows.length > 0) {
+          return directRows.map(r => this.mapExternalEventRow(r));
+        }
+      }
+      const rows = await this.queryTable<any>('sn_compliance_external_event', {
+        sysparm_fields: fields,
         sysparm_query: 'ORDERBYDESCsys_created_on',
         sysparm_limit: '100'
       });
-      return (rows || []).map(r => ({
-        sys_id: getValue(r.sys_id),
-        name: `${getDisplayValue(r.number)}: ${getDisplayValue(r.short_description)}`.trim(),
-        short_description: getDisplayValue(r.short_description),
-        description: getDisplayValue(r.description),
-        incident_type: getDisplayValue(r.incident_type) || getDisplayValue(r.u_type) || getDisplayValue(r.category),
-        affected_records: parseInt(getValue(r.affected_records), 10) || 0,
-        impact: getDisplayValue(r.impact),
-        state: getDisplayValue(r.state)
-      }));
+      return (rows || []).map(r => this.mapExternalEventRow(r));
     } catch {
       return [];
     }
   }
 
   async getAllExternalEvents(): Promise<any[]> {
-    if (!this.useLive) return [];
-    try {
-      const rows = await this.queryTable<any>('sn_compliance_external_event', {
-        sysparm_fields: 'sys_id,name,u_name,event_date,u_event_date,event_type,u_event_type,sentiment,u_sentiment,media_mention_count,u_media_mention,impact_scope,u_impact_scope,duration_days,u_duration_days,status,u_status',
-        sysparm_query: 'ORDERBYDESCsys_created_on',
-        sysparm_limit: '100'
-      });
-      return (rows || []).map(r => ({
-        sys_id: getValue(r.sys_id),
-        name: getDisplayValue(r.u_name) || getDisplayValue(r.name),
-        event_date: getDisplayValue(r.u_event_date) || getDisplayValue(r.event_date),
-        event_type: getDisplayValue(r.u_event_type) || getDisplayValue(r.event_type),
-        sentiment: getDisplayValue(r.u_sentiment) || getDisplayValue(r.sentiment),
-        media_mention_count: parseInt(getValue(r.u_media_mention) || getValue(r.media_mention_count), 10) || 0,
-        impact_scope: getDisplayValue(r.u_impact_scope) || getDisplayValue(r.impact_scope),
-        duration_days: parseInt(getValue(r.u_duration_days) || getValue(r.duration_days), 10) || 0,
-        status: getDisplayValue(r.u_status) || getDisplayValue(r.status)
-      }));
-    } catch {
-      return [];
-    }
+    return this.getExternalEvents();
   }
 }
