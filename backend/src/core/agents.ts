@@ -1196,25 +1196,32 @@ export class InherentAssessmentAgent {
 
       const riskQuery = encodeURIComponent(risk.name);
 
-      // Build comprehensive "WHAT WAS SEARCHED" with clean table labels, record metrics, and full URLs
+      const factorGuidanceUrl = `/now/nav/open/table/sn_risk_advanced_factor?sys_id=${factor.factorSysId || factor.sysId}`;
+
+      // Build comprehensive "WHAT WAS SEARCHED" with clean table labels, record metrics, guidance URL, and full URLs
       const whatSearchedLines: string[] = [
-        `  1. ${entitySearchLabel} issues — searched the ${searchTableLabel}; found ${issueCount} unresolved issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
-        `  2. Relevant issues — ${issueRelevanceLine}`
+        `  1. Factor Guidance Rubric — consulted attached guidance rubric for "${factor.factorName}"`,
+        `  2. ${entitySearchLabel} issues — searched the ${searchTableLabel}; found ${issueCount} unresolved issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
+        `  3. Relevant issues — ${issueRelevanceLine}`
       ];
 
       const auditSearchLines = [
-        `&nbsp;&nbsp;1. ${entitySearchLabel} issues — searched <a href="/now/nav/open/table/sn_grc_m2m_issue_to_entity" target="_blank">Entity Downstream Issues</a> and <a href="/now/nav/open/table/sn_grc_issue" target="_blank">GRC Issues</a>; found ${issueCount} unresolved issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
-        `&nbsp;&nbsp;2. Relevant issues — ${htmlEscape(issueRelevanceLine)}`
+        `&nbsp;&nbsp;1. Factor Guidance Rubric — consulted <a href="${factorGuidanceUrl}" target="_blank">Factor Guidance (${htmlEscape(factor.factorName)})</a> stored in <code>sn_risk_advanced_factor</code>`,
+        `&nbsp;&nbsp;2. ${entitySearchLabel} issues — searched <a href="/now/nav/open/table/sn_grc_m2m_issue_to_entity" target="_blank">Entity Downstream Issues</a> and <a href="/now/nav/open/table/sn_grc_issue" target="_blank">GRC Issues</a>; found ${issueCount} unresolved issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
+        `&nbsp;&nbsp;3. Relevant issues — ${htmlEscape(issueRelevanceLine)}`
       ];
 
       if (draft.toolCallLog && draft.toolCallLog.length > 0) {
-        let searchNumber = 3;
+        let searchNumber = 4;
         for (const toolCall of draft.toolCallLog) {
           if (toolCall.name === 'get_financial_evidence') {
             const fin = draft.evidenceData?.financial;
             const eventCount = fin?.events?.length || 0;
             const totalLoss = fin?.totalExpectedLoss || 0;
-            const lossText = totalLoss > 0 ? `found ${eventCount} relevant risk event(s) with $${totalLoss.toLocaleString()} total expected loss` : `found 0 relevant financial loss events`;
+            const linkDetail = fin?.isDirectLink
+              ? `(directly linked to this risk)`
+              : `(0 directly linked records; discovered via unlinked table analysis)`;
+            const lossText = totalLoss > 0 ? `found ${eventCount} relevant risk event(s) with $${totalLoss.toLocaleString()} total expected loss ${linkDetail}` : `found 0 relevant financial loss events`;
             whatSearchedLines.push(`  ${searchNumber}. Financial Risk Events — searched ${this.getTableLabel('sn_risk_advanced_event')}; ${lossText}`);
             auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. ${this.getTableLabel('sn_risk_advanced_event')} — searched <a href="/now/nav/open/table/sn_risk_advanced_event" target="_blank">${this.getTableLabel('sn_risk_advanced_event')}</a>; ${htmlEscape(lossText)}`);
             searchNumber++;
@@ -1224,44 +1231,53 @@ export class InherentAssessmentAgent {
             const examCount = reg?.exams?.total || 0;
             const findingCount = (reg?.issues?.formalFindings || 0) + (reg?.issues?.enforcementActions || 0);
             const obsCount = reg?.issues?.informalObservations || 0;
+            const linkDetail = reg?.isDirectLink
+              ? `(directly linked to this risk and discovered compliance exams)`
+              : `(0 directly linked records; discovered via unlinked table analysis)`;
             const secSource = reg?.sources?.find((s: any) => s.name === 'SEC EDGAR');
-            const secLabel = secSource?.description || `SEC EDGAR 8-K Search for ${risk.name}`;
+            const secSummary = secSource?.description || 'searched 8-K filings — 0 formal regulatory disclosures found';
             const secUrl = secSource?.url || `https://www.sec.gov/edgar/search/#/q=${riskQuery}&forms=8-K`;
 
-            whatSearchedLines.push(`  ${searchNumber}. Regulatory Evidence — searched ${this.getTableLabel('sn_compliance_exam')} and ${this.getTableLabel('sn_grc_issue')}; found ${examCount} exam(s), ${findingCount} formal finding(s)/order(s), and ${obsCount} informal observation(s)`);
+            whatSearchedLines.push(`  ${searchNumber}. Regulatory Evidence — searched ${this.getTableLabel('sn_compliance_exam')} and ${this.getTableLabel('sn_grc_issue')} ${linkDetail}; found ${examCount} exam(s), ${findingCount} formal finding(s)/order(s), and ${obsCount} informal observation(s)`);
             whatSearchedLines.push(`  ${searchNumber + 1}. Regulatory Sources & URLs Impacting Rating:`);
-            whatSearchedLines.push(`     • SEC EDGAR: ${secLabel} — ${secUrl}`);
-            whatSearchedLines.push(`     • Federal Reserve: https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search`);
-            whatSearchedLines.push(`     • OCC: https://apps.occ.gov/EASearch`);
+            whatSearchedLines.push(`     • SEC EDGAR: ${secUrl} = ${secSummary}`);
+            whatSearchedLines.push(`     • Federal Reserve: https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search = searched enforcement actions database`);
+            whatSearchedLines.push(`     • OCC: https://apps.occ.gov/EASearch = searched enforcement actions database`);
 
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Regulatory evidence — searched <a href="/now/nav/open/table/sn_compliance_exam" target="_blank">${this.getTableLabel('sn_compliance_exam')}</a> and <a href="/now/nav/open/table/sn_grc_issue" target="_blank">${this.getTableLabel('sn_grc_issue')}</a> (${examCount} exams, ${findingCount} formal findings)`);
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Regulatory URLs — <a href="${secUrl}" target="_blank">SEC EDGAR: ${htmlEscape(secLabel)}</a> | <a href="https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search" target="_blank">Federal Reserve Enforcement Actions</a> | <a href="https://apps.occ.gov/EASearch" target="_blank">OCC Enforcement Actions</a>`);
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Regulatory evidence — searched <a href="/now/nav/open/table/sn_compliance_exam" target="_blank">${this.getTableLabel('sn_compliance_exam')}</a> and <a href="/now/nav/open/table/sn_grc_issue" target="_blank">${this.getTableLabel('sn_grc_issue')}</a> ${htmlEscape(linkDetail)} (${examCount} exams, ${findingCount} formal findings)`);
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Regulatory URLs — <a href="${secUrl}" target="_blank">SEC EDGAR (${htmlEscape(secSummary)})</a> | <a href="https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search" target="_blank">Federal Reserve (Enforcement Database)</a> | <a href="https://apps.occ.gov/EASearch" target="_blank">OCC (Enforcement Database)</a>`);
             searchNumber += 2;
           }
           if (toolCall.name === 'get_customer_evidence') {
             const cust = draft.evidenceData?.customer;
             const incidentCount = cust?.recordCount || 0;
             const affected = cust?.affectedCustomers || 0;
-            whatSearchedLines.push(`  ${searchNumber}. Customer Impact — searched ${this.getTableLabel('incident')}; found ${incidentCount} incident(s) with ${affected.toLocaleString()} affected customer record(s)`);
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Customer impact — searched <a href="/now/nav/open/table/incident" target="_blank">${this.getTableLabel('incident')}</a> (${incidentCount} incidents, ${affected} affected customers)`);
+            const linkDetail = cust?.isDirectLink
+              ? `(directly linked to this risk/CI)`
+              : `(0 directly linked incidents; discovered via unlinked table analysis)`;
+            whatSearchedLines.push(`  ${searchNumber}. Customer Impact — searched ${this.getTableLabel('incident')} ${linkDetail}; found ${incidentCount} incident(s) with ${affected.toLocaleString()} affected customer record(s)`);
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Customer impact — searched <a href="/now/nav/open/table/incident" target="_blank">${this.getTableLabel('incident')}</a> ${htmlEscape(linkDetail)} (${incidentCount} incidents, ${affected} affected customers)`);
             searchNumber++;
           }
           if (toolCall.name === 'get_reputational_evidence') {
             const rep = draft.evidenceData?.reputational;
             const eventCount = rep?.internalEvents?.total || 0;
             const mentions = rep?.internalEvents?.totalMentions || 0;
+            const linkDetail = rep?.isDirectLink
+              ? `(directly linked to this risk)`
+              : `(0 directly linked records; discovered via unlinked table analysis)`;
             const gNews = rep?.internetResults?.find((r: any) => r.name === 'Google News');
-            const gNewsTitle = gNews?.title || `News search: ${risk.name}`;
+            const gNewsSummary = gNews?.description || (gNews?.title ? `found live article: "${gNews.title}"` : `searched news articles`);
             const gNewsUrl = gNews?.url || `https://news.google.com/search?q=${riskQuery}`;
 
-            whatSearchedLines.push(`  ${searchNumber}. Reputational Evidence — searched ${this.getTableLabel('sn_compliance_external_event')}; found ${eventCount} event(s) with ${mentions.toLocaleString()} media mention(s)`);
+            whatSearchedLines.push(`  ${searchNumber}. Reputational Evidence — searched ${this.getTableLabel('sn_compliance_external_event')} ${linkDetail}; found ${eventCount} event(s) with ${mentions.toLocaleString()} media mention(s)`);
             whatSearchedLines.push(`  ${searchNumber + 1}. Internet Sources & Articles Impacting Rating:`);
-            whatSearchedLines.push(`     • Google News: "${gNewsTitle}" — ${gNewsUrl}`);
-            whatSearchedLines.push(`     • Reddit: https://www.reddit.com/search/?q=${riskQuery}&sort=new`);
-            whatSearchedLines.push(`     • Bing News: https://www.bing.com/news/search?q=${riskQuery}`);
+            whatSearchedLines.push(`     • Google News: ${gNewsUrl} = ${gNewsSummary}`);
+            whatSearchedLines.push(`     • Reddit: https://www.reddit.com/search/?q=${riskQuery}&sort=new = community discussion search`);
+            whatSearchedLines.push(`     • Bing News: https://www.bing.com/news/search?q=${riskQuery} = media aggregation search`);
 
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Reputational events — searched <a href="/now/nav/open/table/sn_compliance_external_event" target="_blank">${this.getTableLabel('sn_compliance_external_event')}</a> (${eventCount} events, ${mentions} mentions)`);
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Internet Search URLs — <a href="${gNewsUrl}" target="_blank">Google News: ${htmlEscape(gNewsTitle)}</a> | <a href="https://www.reddit.com/search/?q=${riskQuery}&sort=new" target="_blank">Reddit</a> | <a href="https://www.bing.com/news/search?q=${riskQuery}" target="_blank">Bing News</a>`);
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Reputational events — searched <a href="/now/nav/open/table/sn_compliance_external_event" target="_blank">${this.getTableLabel('sn_compliance_external_event')}</a> ${htmlEscape(linkDetail)} (${eventCount} events, ${mentions} mentions)`);
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Internet Search URLs — <a href="${gNewsUrl}" target="_blank">Google News (${htmlEscape(gNewsSummary)})</a> | <a href="https://www.reddit.com/search/?q=${riskQuery}&sort=new" target="_blank">Reddit (Discussions)</a> | <a href="https://www.bing.com/news/search?q=${riskQuery}" target="_blank">Bing News (Media Aggregation)</a>`);
             searchNumber += 2;
           }
         }
@@ -1539,9 +1555,10 @@ export class InherentAssessmentAgent {
       '   relevant issue exists is the rating partly GROUNDED in real data. For regulatory/environment-type factors',
       '   you may reason about the broader real-world landscape, clearly noting it as external reasoning.',
       '5. CRITICAL: When submitting your rating, you MUST structure your justification with specific evidence numbers and sections:',
-      '   • WHY THIS RATING WAS CHOSEN: Cite the specific rubric band matched, key drivers with exact numbers ($ loss figures, exam counts, formal orders, affected customer counts, media mentions), and compare directly against rubric thresholds.',
+      '   • WHY THIS RATING WAS CHOSEN: Explicitly state "As per the attached factor guidance rubric, this factor is rated [Rating] because..." Cite the specific rubric band matched, key drivers with exact numbers ($ loss figures, exam counts, formal orders, affected customer counts, media mentions), and compare directly against rubric thresholds.',
       '   • HOW ACCURATE & GROUNDED: State confidence level, table records evaluated, and why specific records were deemed relevant vs filtered out.',
       '   • CONCLUSION: Concise executive synthesis.',
+      '   • STYLE: Write in professional, audit-ready executive language. Do NOT mention internal tool/function names (e.g. get_regulatory_evidence, submit_rating) or internal system IDs.',
       '',
       'When you have enough evidence, call submit_rating with your final rating; issue_relevant (true only if a',
       'specific issue genuinely influenced THIS factor); relevant_issues (the exact issue description text for each',
@@ -1833,6 +1850,7 @@ export class InherentAssessmentAgent {
       const events = await this.filterBySemanticRelevance(allEvents, `Which financial events relate to risk: ${riskName}? Description: ${riskDescription}`, 'financial_event');
       const totalLoss = events.reduce((sum: number, e: any) => sum + (e.expected_loss || 0), 0);
       const highestLoss = Math.max(...events.map((e: any) => e.expected_loss || 0), 0);
+      const isDirectLink = events.length > 0 && events.some((e: any) => e.is_direct_link);
 
       const sources: any[] = [];
       if (events.length > 0) {
@@ -1840,7 +1858,8 @@ export class InherentAssessmentAgent {
           name: this.getTableLabel('sn_risk_advanced_event'),
           recordCount: events.length,
           url: `/now/nav/open/table/sn_risk_advanced_event?sysparm_query=sys_id=${riskSysId}`,
-          found: true
+          found: true,
+          isDirectLink
         });
       }
 
@@ -1849,8 +1868,9 @@ export class InherentAssessmentAgent {
         recordCount: events.length,
         totalExpectedLoss: totalLoss,
         highestSingleLoss: highestLoss,
-        events: events.map((e: any) => ({ name: e.name, loss: e.expected_loss, impact: e.impact, discovered: e.discovered_on })),
-        summary: events.length > 0 ? `Found ${events.length} ${this.getTableLabel('sn_risk_advanced_event').toLowerCase()}: $${totalLoss.toLocaleString()} total expected loss` : `No ${this.getTableLabel('sn_risk_advanced_event').toLowerCase()} found`
+        isDirectLink,
+        events: events.map((e: any) => ({ name: e.name, loss: e.expected_loss, impact: e.impact, discovered: e.discovered_on, isDirectLink: e.is_direct_link })),
+        summary: events.length > 0 ? `Found ${events.length} ${this.getTableLabel('sn_risk_advanced_event').toLowerCase()} (${isDirectLink ? 'directly linked' : 'discovered via unlinked table analysis'}): $${totalLoss.toLocaleString()} total expected loss` : `No ${this.getTableLabel('sn_risk_advanced_event').toLowerCase()} found`
       };
     } catch (e) {
       return { sources: [], error: (e as Error).message, recordCount: 0, summary: 'Error retrieving financial data' };
@@ -1862,10 +1882,11 @@ export class InherentAssessmentAgent {
     try {
       // Prioritize risk-linked records; fallback to all records if none linked
       const allExams = await (this.adapter as any).getComplianceExams?.(riskSysId) || await (this.adapter as any).getAllComplianceExams?.() || [];
-      const allIssues = await (this.adapter as any).getGrcIssues?.(riskSysId) || await (this.adapter as any).getAllGrcIssues?.() || [];
-
-      // LLM semantic filtering for relevance
       const exams = await this.filterBySemanticRelevance(allExams, `Which exams relate to risk: ${riskName}? ${riskDescription}`, 'compliance_exam');
+
+      // Query issues linked to risk AND issues related to the discovered compliance exams
+      const examSysIds = exams.map((e: any) => e.sys_id).filter(Boolean);
+      const allIssues = await (this.adapter as any).getGrcIssues?.(riskSysId, examSysIds) || await (this.adapter as any).getAllGrcIssues?.() || [];
       const issues = await this.filterBySemanticRelevance(allIssues, `Which issues relate to risk: ${riskName}? ${riskDescription}`, 'grc_issue');
 
       // Query free public APIs for regulatory context
@@ -1876,16 +1897,17 @@ export class InherentAssessmentAgent {
       const formalFindings = issues.filter((i: any) => i.severity === 'Formal Finding').length;
       const informalObs = issues.filter((i: any) => i.severity === 'Informal Observation').length;
       const enforcement = issues.filter((i: any) => i.severity === 'Enforcement Action').length;
+      const isDirectLink = (exams.length > 0 && exams.some((e: any) => e.is_direct_link)) || (issues.length > 0 && issues.some((i: any) => i.is_direct_link));
 
       const sources: any[] = [];
       const examLabel = this.getTableLabel('sn_compliance_exam');
       const issueLabel = this.getTableLabel('sn_grc_issue');
 
       if (exams.length > 0) {
-        sources.push({ name: examLabel, recordCount: exams.length, url: `/now/nav/open/table/sn_compliance_exam?sysparm_query=sysId=${riskSysId}` });
+        sources.push({ name: examLabel, recordCount: exams.length, url: `/now/nav/open/table/sn_compliance_exam?sysparm_query=sysId=${riskSysId}`, isDirectLink: exams.some((e: any) => e.is_direct_link) });
       }
       if (issues.length > 0) {
-        sources.push({ name: issueLabel, recordCount: issues.length, url: `/now/nav/open/table/sn_grc_issue?sysparm_query=sysId=${riskSysId}` });
+        sources.push({ name: issueLabel, recordCount: issues.length, url: `/now/nav/open/table/sn_grc_issue?sysparm_query=sysId=${riskSysId}`, isDirectLink: issues.some((i: any) => i.is_direct_link) });
       }
       if (secResults.length > 0) {
         sources.push(secResults[0]);
@@ -1899,14 +1921,16 @@ export class InherentAssessmentAgent {
 
       return {
         sources,
-        exams: { total: exams.length, records: exams.map((e: any) => ({ name: e.name, date: e.exam_date, regulator: e.regulator_name })) },
+        isDirectLink,
+        exams: { total: exams.length, isDirectLink: exams.some((e: any) => e.is_direct_link), records: exams.map((e: any) => ({ name: e.name, date: e.exam_date, regulator: e.regulator_name, isDirectLink: e.is_direct_link })) },
         issues: {
           formalFindings,
           informalObservations: informalObs,
           enforcementActions: enforcement,
-          records: issues.map((i: any) => ({ name: i.name, severity: i.severity, status: i.remediation_status }))
+          isDirectLink: issues.some((i: any) => i.is_direct_link),
+          records: issues.map((i: any) => ({ name: i.name, severity: i.severity, status: i.remediation_status, isDirectLink: i.is_direct_link }))
         },
-        summary: `Regulatory: ${formalFindings} formal findings, ${informalObs} informal observations, ${enforcement} enforcement actions${sources.length > 0 ? `. Consulted: ${sources.map(s => s.name).join(', ')}` : ''}`
+        summary: `Regulatory: ${formalFindings} formal findings, ${informalObs} informal observations, ${enforcement} enforcement actions (${isDirectLink ? 'directly linked' : 'discovered via unlinked table analysis'})${sources.length > 0 ? `. Consulted: ${sources.map(s => s.name).join(', ')}` : ''}`
       };
     } catch (e) {
       return { sources: [], error: (e as Error).message, summary: 'Error retrieving regulatory data' };
@@ -1923,6 +1947,7 @@ export class InherentAssessmentAgent {
       const incidents = await this.filterBySemanticRelevance(allIncidents, `Which incidents relate to risk: ${riskName}? ${riskDescription}`, 'incident');
       const affectedCustomers = incidents.reduce((sum: number, i: any) => sum + (i.affected_records || 0), 0);
       const activeIncidents = incidents.filter((i: any) => i.state === 'Active' || i.state === 'Open').length;
+      const isDirectLink = incidents.length > 0 && incidents.some((i: any) => i.is_direct_link);
 
       const sources: any[] = [];
       const incidentLabel = this.getTableLabel('incident');
@@ -1932,7 +1957,8 @@ export class InherentAssessmentAgent {
           name: incidentLabel,
           recordCount: incidents.length,
           url: `/now/nav/open/table/incident?sysparm_query=sysId=${riskSysId}`,
-          affectedCustomers
+          affectedCustomers,
+          isDirectLink
         });
       }
 
@@ -1941,13 +1967,14 @@ export class InherentAssessmentAgent {
         recordCount: incidents.length,
         activeCount: activeIncidents,
         affectedCustomers,
+        isDirectLink,
         byType: {
           complianceIssues: incidents.filter((i: any) => i.incident_type === 'Compliance Issue').length,
           operationalIncidents: incidents.filter((i: any) => i.incident_type === 'Operational Incident').length,
           serviceFailures: incidents.filter((i: any) => i.incident_type === 'Service Failure').length
         },
-        incidents: incidents.map((i: any) => ({ name: i.name, type: i.incident_type, affected: i.affected_records, impact: i.impact, state: i.state })),
-        summary: incidents.length > 0 ? `Found ${incidents.length} ${incidentLabel.toLowerCase()} affecting ${affectedCustomers} customers (${activeIncidents} active)` : `No ${incidentLabel.toLowerCase()} found`
+        incidents: incidents.map((i: any) => ({ name: i.name, type: i.incident_type, affected: i.affected_records, impact: i.impact, state: i.state, isDirectLink: i.is_direct_link })),
+        summary: incidents.length > 0 ? `Found ${incidents.length} ${incidentLabel.toLowerCase()} (${isDirectLink ? 'directly linked' : 'discovered via unlinked table analysis'}) affecting ${affectedCustomers} customers (${activeIncidents} active)` : `No ${incidentLabel.toLowerCase()} found`
       };
     } catch (e) {
       return { sources: [], error: (e as Error).message, recordCount: 0, summary: 'Error retrieving customer data' };
@@ -1970,6 +1997,7 @@ export class InherentAssessmentAgent {
 
       const negativeEvents = events.filter((e: any) => e.sentiment === 'Negative').length;
       const totalMentions = events.reduce((sum: number, e: any) => sum + (e.media_mention_count || 0), 0);
+      const isDirectLink = events.length > 0 && events.some((e: any) => e.is_direct_link);
 
       const sources: any[] = [];
       const eventLabel = this.getTableLabel('sn_compliance_external_event');
@@ -1979,7 +2007,8 @@ export class InherentAssessmentAgent {
           name: eventLabel,
           recordCount: events.length,
           url: `/now/nav/open/table/sn_compliance_external_event?sysparm_query=sysId=${riskSysId}`,
-          mentions: totalMentions
+          mentions: totalMentions,
+          isDirectLink
         });
       }
       if (newsResults.length > 0) {
@@ -1994,14 +2023,16 @@ export class InherentAssessmentAgent {
 
       return {
         sources,
+        isDirectLink,
         internalEvents: {
           total: events.length,
           negativeCount: negativeEvents,
           totalMentions: totalMentions,
-          records: events.map((e: any) => ({ name: e.name, sentiment: e.sentiment, mentions: e.media_mention_count, scope: e.impact_scope }))
+          isDirectLink,
+          records: events.map((e: any) => ({ name: e.name, sentiment: e.sentiment, mentions: e.media_mention_count, scope: e.impact_scope, isDirectLink: e.is_direct_link }))
         },
         internetResults: [...newsResults, ...redditResults, ...bingResults],
-        summary: events.length > 0 ? `Found ${events.length} ${eventLabel.toLowerCase()} (${totalMentions} mentions, ${negativeEvents} negative). ${sources.length > 1 ? 'Searched: ' + sources.map(s => s.name).join(', ') : ''}` : `No ${eventLabel.toLowerCase()} found`
+        summary: events.length > 0 ? `Found ${events.length} ${eventLabel.toLowerCase()} (${isDirectLink ? 'directly linked' : 'discovered via unlinked table analysis'}, ${totalMentions} mentions, ${negativeEvents} negative). ${sources.length > 1 ? 'Searched: ' + sources.map(s => s.name).join(', ') : ''}` : `No ${eventLabel.toLowerCase()} found`
       };
     } catch (e) {
       return { sources: [], error: (e as Error).message, recordCount: 0, summary: 'Error retrieving reputational data' };

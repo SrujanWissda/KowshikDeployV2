@@ -1770,47 +1770,67 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
   // 1. If riskSysId is provided, query for records directly referencing the risk (u_risk, risk, item, risk_reference).
   // 2. If no direct records exist, query ALL records and let LLM semantic relevance filter identify related records.
 
-  private mapFinancialEventRow(r: any): any {
+  private mapFinancialEventRow(r: any, isDirect: boolean = false): any {
     return {
       sys_id: getValue(r.sys_id),
       name: getDisplayValue(r.name) || getDisplayValue(r.description),
       description: getDisplayValue(r.description),
       expected_loss: parseFloat(getValue(r.expected_loss)) || 0,
       impact: parseInt(getValue(r.impact), 10) || 0,
-      discovered_on: getDisplayValue(r.discovered_on)
+      discovered_on: getDisplayValue(r.discovered_on),
+      is_direct_link: isDirect
     };
   }
 
   async getFinancialRiskEvents(riskSysId?: string): Promise<any[]> {
     if (!this.useLive) return [];
-    const fields = 'sys_id,name,expected_loss,impact,discovered_on,description,risk_reference,u_risk,risk';
+    const fields = 'sys_id,name,expected_loss,impact,discovered_on,description,risk_reference';
     try {
       if (riskSysId) {
         const directRows = await this.queryTable<any>('sn_risk_advanced_event', {
           sysparm_fields: fields,
-          sysparm_query: `risk_reference=${riskSysId}^ORu_risk=${riskSysId}^ORrisk=${riskSysId}^ORDERBYDESCsys_created_on`,
+          sysparm_query: `risk_reference=${riskSysId}^ORDERBYDESCsys_created_on`,
           sysparm_limit: '100'
         });
         if (directRows && directRows.length > 0) {
-          return directRows.map(r => this.mapFinancialEventRow(r));
+          return directRows.map(r => this.mapFinancialEventRow(r, true));
         }
+      }
+      // If none found from risk_reference, query all records where risk_reference is empty/unlinked
+      const unlinkedRows = await this.queryTable<any>('sn_risk_advanced_event', {
+        sysparm_fields: fields,
+        sysparm_query: 'risk_referenceISEMPTY^ORDERBYDESCsys_created_on',
+        sysparm_limit: '100'
+      });
+      if (unlinkedRows && unlinkedRows.length > 0) {
+        return unlinkedRows.map(r => this.mapFinancialEventRow(r, false));
       }
       const rows = await this.queryTable<any>('sn_risk_advanced_event', {
         sysparm_fields: fields,
         sysparm_query: 'ORDERBYDESCsys_created_on',
         sysparm_limit: '100'
       });
-      return (rows || []).map(r => this.mapFinancialEventRow(r));
+      return (rows || []).map(r => this.mapFinancialEventRow(r, false));
     } catch {
       return [];
     }
   }
 
   async getAllFinancialRiskEvents(): Promise<any[]> {
-    return this.getFinancialRiskEvents();
+    if (!this.useLive) return [];
+    try {
+      const rows = await this.queryTable<any>('sn_risk_advanced_event', {
+        sysparm_fields: 'sys_id,name,expected_loss,impact,discovered_on,description',
+        sysparm_query: 'ORDERBYDESCsys_created_on',
+        sysparm_limit: '100'
+      });
+      return (rows || []).map(r => this.mapFinancialEventRow(r, false));
+    } catch {
+      return [];
+    }
   }
 
-  private mapComplianceExamRow(r: any): any {
+  private mapComplianceExamRow(r: any, isDirect: boolean = false): any {
     return {
       sys_id: getValue(r.sys_id),
       name: getDisplayValue(r.u_name) || getDisplayValue(r.name),
@@ -1819,80 +1839,151 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       regulator_name: getDisplayValue(r.u_regulator_name) || getDisplayValue(r.regulator_name),
       formal_findings: parseInt(getValue(r.u_formal_findings), 10) || 0,
       informal_observations: parseInt(getValue(r.u_informal_observations), 10) || 0,
-      status: getDisplayValue(r.u_status) || getDisplayValue(r.status)
+      status: getDisplayValue(r.u_status) || getDisplayValue(r.status),
+      is_direct_link: isDirect
     };
   }
 
   async getComplianceExams(riskSysId?: string): Promise<any[]> {
     if (!this.useLive) return [];
-    const fields = 'sys_id,name,u_name,exam_date,u_exam_date,regulator_name,u_regulator_name,type,u_status,status,u_formal_findings,u_informal_observations,u_description,description,u_risk,risk';
+    const fields = 'sys_id,name,u_name,exam_date,u_exam_date,regulator_name,u_regulator_name,type,u_status,status,u_formal_findings,u_informal_observations,u_description,description,u_risk';
     try {
       if (riskSysId) {
         const directRows = await this.queryTable<any>('sn_compliance_exam', {
           sysparm_fields: fields,
-          sysparm_query: `u_risk=${riskSysId}^ORrisk=${riskSysId}^ORDERBYDESCsys_created_on`,
+          sysparm_query: `u_risk=${riskSysId}^ORDERBYDESCsys_created_on`,
           sysparm_limit: '100'
         });
         if (directRows && directRows.length > 0) {
-          return directRows.map(r => this.mapComplianceExamRow(r));
+          return directRows.map(r => this.mapComplianceExamRow(r, true));
         }
+      }
+      // If none found from u_risk, query where u_risk is empty, fallback to all records
+      const unlinkedRows = await this.queryTable<any>('sn_compliance_exam', {
+        sysparm_fields: fields,
+        sysparm_query: 'u_riskISEMPTY^ORDERBYDESCsys_created_on',
+        sysparm_limit: '100'
+      });
+      if (unlinkedRows && unlinkedRows.length > 0) {
+        return unlinkedRows.map(r => this.mapComplianceExamRow(r, false));
       }
       const rows = await this.queryTable<any>('sn_compliance_exam', {
         sysparm_fields: fields,
         sysparm_query: 'ORDERBYDESCsys_created_on',
         sysparm_limit: '100'
       });
-      return (rows || []).map(r => this.mapComplianceExamRow(r));
+      return (rows || []).map(r => this.mapComplianceExamRow(r, false));
     } catch {
       return [];
     }
   }
 
   async getAllComplianceExams(): Promise<any[]> {
-    return this.getComplianceExams();
+    if (!this.useLive) return [];
+    try {
+      const rows = await this.queryTable<any>('sn_compliance_exam', {
+        sysparm_fields: 'sys_id,name,u_name,exam_date,u_exam_date,regulator_name,u_regulator_name,type,u_status,status,u_formal_findings,u_informal_observations,u_description,description',
+        sysparm_query: 'ORDERBYDESCsys_created_on',
+        sysparm_limit: '100'
+      });
+      return (rows || []).map(r => this.mapComplianceExamRow(r, false));
+    } catch {
+      return [];
+    }
   }
 
-  private mapGrcIssueRow(r: any): any {
+  private mapGrcIssueRow(r: any, isDirect: boolean = false): any {
     return {
       sys_id: getValue(r.sys_id),
       name: getDisplayValue(r.short_description) || getDisplayValue(r.name),
       description: getDisplayValue(r.description) || getDisplayValue(r.short_description),
       severity: getDisplayValue(r.severity) || getDisplayValue(r.priority),
       remediation_status: getDisplayValue(r.remediation_status) || getDisplayValue(r.state),
-      due_date: getDisplayValue(r.due_date)
+      due_date: getDisplayValue(r.due_date),
+      is_direct_link: isDirect
     };
   }
 
-  async getGrcIssues(riskSysId?: string): Promise<any[]> {
+  async getGrcIssues(riskSysId?: string, examSysIds?: string[]): Promise<any[]> {
     if (!this.useLive) return [];
-    const fields = 'sys_id,name,short_description,severity,remediation_status,due_date,description,priority,state,item,u_risk,risk';
+    const fields = 'sys_id,name,short_description,severity,remediation_status,due_date,description,priority,state,item,u_exam,parent';
     try {
+      const results: any[] = [];
+      const seenIds = new Set<string>();
+
+      // 1. Direct risk linkage
       if (riskSysId) {
         const directRows = await this.queryTable<any>('sn_grc_issue', {
           sysparm_fields: fields,
-          sysparm_query: `item=${riskSysId}^ORu_risk=${riskSysId}^ORrisk=${riskSysId}^ORDERBYDESCsys_created_on`,
+          sysparm_query: `item=${riskSysId}^ORDERBYDESCsys_created_on`,
           sysparm_limit: '100'
         });
-        if (directRows && directRows.length > 0) {
-          return directRows.map(r => this.mapGrcIssueRow(r));
+        for (const r of directRows || []) {
+          const id = getValue(r.sys_id);
+          if (id && !seenIds.has(id)) {
+            seenIds.add(id);
+            results.push(this.mapGrcIssueRow(r, true));
+          }
         }
       }
+
+      // 2. Issues related to found exams
+      if (examSysIds && examSysIds.length > 0) {
+        const examQuery = examSysIds.map(eid => `u_exam=${eid}^ORparent=${eid}`).join('^OR');
+        const examIssueRows = await this.queryTable<any>('sn_grc_issue', {
+          sysparm_fields: fields,
+          sysparm_query: `${examQuery}^ORDERBYDESCsys_created_on`,
+          sysparm_limit: '100'
+        });
+        for (const r of examIssueRows || []) {
+          const id = getValue(r.sys_id);
+          if (id && !seenIds.has(id)) {
+            seenIds.add(id);
+            results.push(this.mapGrcIssueRow(r, true));
+          }
+        }
+      }
+
+      if (results.length > 0) {
+        return results;
+      }
+
+      // 3. Fallback: Search records where item is empty, fallback to all records
+      const unlinkedRows = await this.queryTable<any>('sn_grc_issue', {
+        sysparm_fields: fields,
+        sysparm_query: 'itemISEMPTY^ORDERBYDESCsys_created_on',
+        sysparm_limit: '100'
+      });
+      if (unlinkedRows && unlinkedRows.length > 0) {
+        return unlinkedRows.map(r => this.mapGrcIssueRow(r, false));
+      }
+
       const rows = await this.queryTable<any>('sn_grc_issue', {
         sysparm_fields: fields,
         sysparm_query: 'ORDERBYDESCsys_created_on',
         sysparm_limit: '100'
       });
-      return (rows || []).map(r => this.mapGrcIssueRow(r));
+      return (rows || []).map(r => this.mapGrcIssueRow(r, false));
     } catch {
       return [];
     }
   }
 
   async getAllGrcIssues(): Promise<any[]> {
-    return this.getGrcIssues();
+    if (!this.useLive) return [];
+    try {
+      const rows = await this.queryTable<any>('sn_grc_issue', {
+        sysparm_fields: 'sys_id,name,short_description,severity,remediation_status,due_date,description,priority,state',
+        sysparm_query: 'ORDERBYDESCsys_created_on',
+        sysparm_limit: '100'
+      });
+      return (rows || []).map(r => this.mapGrcIssueRow(r, false));
+    } catch {
+      return [];
+    }
   }
 
-  private mapIncidentRow(r: any): any {
+  private mapIncidentRow(r: any, isDirect: boolean = false): any {
     return {
       sys_id: getValue(r.sys_id),
       name: `${getDisplayValue(r.number)}: ${getDisplayValue(r.short_description)}`.trim(),
@@ -1901,7 +1992,8 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       incident_type: getDisplayValue(r.incident_type) || getDisplayValue(r.u_type) || getDisplayValue(r.category),
       affected_records: parseInt(getValue(r.affected_records), 10) || 0,
       impact: getDisplayValue(r.impact),
-      state: getDisplayValue(r.state)
+      state: getDisplayValue(r.state),
+      is_direct_link: isDirect
     };
   }
 
@@ -1912,11 +2004,11 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       if (riskSysId) {
         const directRows = await this.queryTable<any>('incident', {
           sysparm_fields: fields,
-          sysparm_query: `cmdb_ci=${riskSysId}^ORu_risk=${riskSysId}^ORDERBYDESCsys_created_on`,
+          sysparm_query: `cmdb_ci=${riskSysId}^ORDERBYDESCsys_created_on`,
           sysparm_limit: '100'
         });
         if (directRows && directRows.length > 0) {
-          return directRows.map(r => this.mapIncidentRow(r));
+          return directRows.map(r => this.mapIncidentRow(r, true));
         }
       }
       const rows = await this.queryTable<any>('incident', {
@@ -1924,7 +2016,7 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
         sysparm_query: 'ORDERBYDESCsys_created_on',
         sysparm_limit: '100'
       });
-      return (rows || []).map(r => this.mapIncidentRow(r));
+      return (rows || []).map(r => this.mapIncidentRow(r, false));
     } catch {
       return [];
     }
@@ -1934,7 +2026,7 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
     return this.getIncidents();
   }
 
-  private mapExternalEventRow(r: any): any {
+  private mapExternalEventRow(r: any, isDirect: boolean = false): any {
     return {
       sys_id: getValue(r.sys_id),
       name: getDisplayValue(r.u_name) || getDisplayValue(r.name),
@@ -1944,36 +2036,56 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       media_mention_count: parseInt(getValue(r.u_media_mention) || getValue(r.media_mention_count), 10) || 0,
       impact_scope: getDisplayValue(r.u_impact_scope) || getDisplayValue(r.impact_scope),
       duration_days: parseInt(getValue(r.u_duration_days) || getValue(r.duration_days), 10) || 0,
-      status: getDisplayValue(r.u_status) || getDisplayValue(r.status)
+      status: getDisplayValue(r.u_status) || getDisplayValue(r.status),
+      is_direct_link: isDirect
     };
   }
 
   async getExternalEvents(riskSysId?: string): Promise<any[]> {
     if (!this.useLive) return [];
-    const fields = 'sys_id,name,u_name,event_date,u_event_date,event_type,u_event_type,sentiment,u_sentiment,media_mention_count,u_media_mention,impact_scope,u_impact_scope,duration_days,u_duration_days,status,u_status,u_risk,risk';
+    const fields = 'sys_id,name,u_name,event_date,u_event_date,event_type,u_event_type,sentiment,u_sentiment,media_mention_count,u_media_mention,impact_scope,u_impact_scope,duration_days,u_duration_days,status,u_status,u_risk';
     try {
       if (riskSysId) {
         const directRows = await this.queryTable<any>('sn_compliance_external_event', {
           sysparm_fields: fields,
-          sysparm_query: `u_risk=${riskSysId}^ORrisk=${riskSysId}^ORDERBYDESCsys_created_on`,
+          sysparm_query: `u_risk=${riskSysId}^ORDERBYDESCsys_created_on`,
           sysparm_limit: '100'
         });
         if (directRows && directRows.length > 0) {
-          return directRows.map(r => this.mapExternalEventRow(r));
+          return directRows.map(r => this.mapExternalEventRow(r, true));
         }
+      }
+      // If none found from u_risk, query where u_risk is empty, fallback to all records
+      const unlinkedRows = await this.queryTable<any>('sn_compliance_external_event', {
+        sysparm_fields: fields,
+        sysparm_query: 'u_riskISEMPTY^ORDERBYDESCsys_created_on',
+        sysparm_limit: '100'
+      });
+      if (unlinkedRows && unlinkedRows.length > 0) {
+        return unlinkedRows.map(r => this.mapExternalEventRow(r, false));
       }
       const rows = await this.queryTable<any>('sn_compliance_external_event', {
         sysparm_fields: fields,
         sysparm_query: 'ORDERBYDESCsys_created_on',
         sysparm_limit: '100'
       });
-      return (rows || []).map(r => this.mapExternalEventRow(r));
+      return (rows || []).map(r => this.mapExternalEventRow(r, false));
     } catch {
       return [];
     }
   }
 
   async getAllExternalEvents(): Promise<any[]> {
-    return this.getExternalEvents();
+    if (!this.useLive) return [];
+    try {
+      const rows = await this.queryTable<any>('sn_compliance_external_event', {
+        sysparm_fields: 'sys_id,name,u_name,event_date,u_event_date,event_type,u_event_type,sentiment,u_sentiment,media_mention_count,u_media_mention,impact_scope,u_impact_scope,duration_days,u_duration_days,status,u_status',
+        sysparm_query: 'ORDERBYDESCsys_created_on',
+        sysparm_limit: '100'
+      });
+      return (rows || []).map(r => this.mapExternalEventRow(r, false));
+    } catch {
+      return [];
+    }
   }
 }
