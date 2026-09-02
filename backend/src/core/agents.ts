@@ -3857,6 +3857,7 @@ CRITICAL RULES:
         await writeTraceM.call(this.adapter, {
           agentName: 'AuthorityDocumentCitationAgent',
           targetId: docSysId,
+          authorityDocSysId: docSysId,
           outcome: 'decomposed',
           results: {
             scenario,
@@ -4235,6 +4236,7 @@ Return JSON with this exact structure:
         await writeTraceM.call(this.adapter, {
           agentName: 'CitationRiskMappingAgent',
           targetId: citationSysId,
+          citationSysId: citationSysId,
           outcome: 'mapped',
           results: {
             existingRisksMapped,

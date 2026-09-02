@@ -1676,6 +1676,8 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
     riskSysId?: string;
     assessmentNumber?: string;
     summary?: string;
+    authorityDocSysId?: string;
+    citationSysId?: string;
   }): Promise<void> {
     // CRITICAL FIX: Write to ServiceNow if we have credentials, even if useLive detection failed
     // This ensures audit trail is created for all instances with valid URL + auth header
@@ -1699,7 +1701,11 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
         postPayload.u_ema_audit_summary = payload.summary.slice(0, 2000);
       }
 
-      if (payload.agentName === 'RiskControlMappingAgent') {
+      if (payload.agentName === 'AuthorityDocumentCitationAgent' || payload.authorityDocSysId) {
+        postPayload.u_authority_document = payload.authorityDocSysId || payload.targetId;
+      } else if (payload.agentName === 'CitationRiskMappingAgent' || payload.citationSysId) {
+        postPayload.u_citation = payload.citationSysId || payload.targetId;
+      } else if (payload.agentName === 'RiskControlMappingAgent' || payload.agentName === 'IssueIdentificationAgent') {
         postPayload.u_risk = payload.targetId;
       } else {
         if (payload.riskSysId) {
@@ -1710,8 +1716,21 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
         }
       }
 
-      await this.postRecord('u_ema_audit_trail', postPayload);
-      console.log(`[Ema Observability] Trace written to u_ema_audit_trail for ${payload.agentName}`);
+      try {
+        await this.postRecord('u_ema_audit_trail', postPayload);
+        console.log(`[Ema Observability] Trace written to u_ema_audit_trail for ${payload.agentName}`);
+      } catch (postErr: any) {
+        // Fallback: if custom reference fields fail on the table, post core trace
+        if (postPayload.u_authority_document || postPayload.u_citation) {
+          const fallbackPayload = { ...postPayload };
+          delete fallbackPayload.u_authority_document;
+          delete fallbackPayload.u_citation;
+          await this.postRecord('u_ema_audit_trail', fallbackPayload);
+          console.log(`[Ema Observability] Trace written to u_ema_audit_trail (fallback without entity link) for ${payload.agentName}`);
+        } else {
+          throw postErr;
+        }
+      }
     } catch (e: any) {
       // 404 = table not present on this instance; any other error = transient.
       // Either way, observability must never block or surface to the user.
@@ -2233,24 +2252,14 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       if (obl) {
         obl.document = authorityDocSysId;
       }
-      console.log(`[ServiceNow DB UPDATE] Table [sn_compliance_citation] row [${obligationSysId}] -> u_ai_recommendation / comments: [Justification written]`);
+      console.log(`[ServiceNow DB UPDATE] Table [sn_compliance_citation] row [${obligationSysId}] -> document mapped to [${authorityDocSysId}]`);
       return true;
     }
     try {
-      try {
-        await this.putRecord('sn_compliance_citation', obligationSysId, {
-          document: authorityDocSysId,
-          comments: justification,
-          u_ai_recommendation: justification
-        });
-        return true;
-      } catch {
-        await this.putRecord('sn_compliance_citation', obligationSysId, {
-          document: authorityDocSysId,
-          comments: justification
-        });
-        return true;
-      }
+      await this.putRecord('sn_compliance_citation', obligationSysId, {
+        document: authorityDocSysId
+      });
+      return true;
     } catch (e) {
       console.warn(`[ServiceNowAdapter] Failed to create citation mapping: ${(e as Error).message}`);
       return false;
@@ -2258,7 +2267,6 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
   }
 
   async createObligation(obligation: { name: string; description: string; document: string; source: string; justification?: string }): Promise<any> {
-    const just = obligation.justification || `Auto-created: ${obligation.source}`;
     if (!this.useLive) {
       const newObl = {
         sys_id: `obl_mock_${Date.now()}`,
@@ -2269,29 +2277,16 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
         sys_created_on: new Date().toISOString()
       };
       sn_compliance_citation.push(newObl);
-      console.log(`[ServiceNow DB UPDATE] Created obligation [${obligation.name}] with justification in u_ai_recommendation.`);
+      console.log(`[ServiceNow DB UPDATE] Created obligation [${obligation.name}] linked to authority doc [${obligation.document}]`);
       return newObl;
     }
     try {
-      let result;
-      try {
-        result = await this.postRecord('sn_compliance_citation', {
-          name: obligation.name,
-          description: obligation.description,
-          document: obligation.document,
-          reference: obligation.name,
-          comments: just,
-          u_ai_recommendation: just
-        });
-      } catch {
-        result = await this.postRecord('sn_compliance_citation', {
-          name: obligation.name,
-          description: obligation.description,
-          document: obligation.document,
-          reference: obligation.name,
-          comments: just
-        });
-      }
+      const result = await this.postRecord('sn_compliance_citation', {
+        name: obligation.name,
+        description: obligation.description,
+        document: obligation.document,
+        reference: obligation.name
+      });
       return result;
     } catch (e) {
       console.warn(`[ServiceNowAdapter] Failed to create obligation: ${(e as Error).message}`);
@@ -2413,16 +2408,9 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
         citationSet.add(citationSysId);
         const updatedCitations = Array.from(citationSet).join(',');
 
-        try {
-          await this.putRecord('sn_risk_risk', riskSysId, {
-            u_citations: updatedCitations,
-            u_ai_recommendation: justification
-          });
-        } catch {
-          await this.putRecord('sn_risk_risk', riskSysId, {
-            u_citations: updatedCitations
-          });
-        }
+        await this.putRecord('sn_risk_risk', riskSysId, {
+          u_citations: updatedCitations
+        });
         console.log(`[ServiceNow LIVE UPDATE] Risk ${riskSysId} u_citations updated to: ${updatedCitations}`);
         return true;
       } catch (e: any) {
@@ -2437,7 +2425,6 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       const citationSet = new Set((risk.u_citations || '').split(',').map(s => s.trim()).filter(Boolean));
       citationSet.add(citationSysId);
       risk.u_citations = Array.from(citationSet).join(',');
-      risk.u_ai_recommendation = justification;
       console.log(`[ServiceNow DB UPDATE] Table [sn_risk_risk] row [${riskSysId}] -> u_citations: [${risk.u_citations}]`);
     }
     return true;
@@ -2452,29 +2439,17 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
     draft?: boolean;
     category?: string;
   }): Promise<any> {
-    const just = risk.justification || `Auto-created from citation ${risk.citationSysId}`;
     const riskName = risk.draft ? `[DRAFT] ${risk.name}` : risk.name;
 
     if (this.useLive) {
       try {
-        let result;
-        try {
-          result = await this.postRecord('sn_risk_risk', {
-            name: riskName,
-            description: risk.description,
-            profile: risk.profileSysId,
-            u_citations: risk.citationSysId,
-            u_ai_recommendation: just,
-            category: risk.category || 'Regulatory / Compliance'
-          });
-        } catch {
-          result = await this.postRecord('sn_risk_risk', {
-            name: riskName,
-            description: risk.description,
-            profile: risk.profileSysId,
-            u_citations: risk.citationSysId
-          });
-        }
+        const result = await this.postRecord('sn_risk_risk', {
+          name: riskName,
+          description: risk.description,
+          profile: risk.profileSysId,
+          u_citations: risk.citationSysId,
+          category: risk.category || 'Regulatory / Compliance'
+        });
         console.log(`[ServiceNow LIVE CREATE] Created risk "${riskName}" for entity ${risk.profileSysId} with u_citations=${risk.citationSysId}`);
         return result;
       } catch (e: any) {
@@ -2491,8 +2466,7 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       description: risk.description,
       profile: risk.profileSysId,
       profile_name: entityProfile?.name || 'Unknown Entity',
-      u_citations: risk.citationSysId,
-      u_ai_recommendation: just
+      u_citations: risk.citationSysId
     };
     sn_risk_risk.push(newRisk);
     console.log(`[ServiceNow DB UPDATE] Created ${risk.draft ? 'DRAFT ' : ''}risk [${newRisk.name}] for entity [${entityProfile?.name}] with u_citations=[${risk.citationSysId}]`);
