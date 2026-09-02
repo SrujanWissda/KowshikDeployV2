@@ -1057,4 +1057,48 @@ export class SalesforceAdapter extends BaseGRCAdapter {
       console.log(`[Salesforce DB UPDATE] Object [Assessment_Factor__c] row [${rowSysId}] marked with error comments`);
     }
   }
+
+  // --------------------------------------------------------------------------
+  // Authority Document & Citation / Obligation Methods
+  // --------------------------------------------------------------------------
+  async getAllAuthorityDocuments(): Promise<any[]> {
+    return [
+      { sys_id: 'sf_auth_doc_901', sysId: 'sf_auth_doc_901', name: 'Cloud Security Standard (NIST SP 800-53)', number: 'NIST-800-53', type: 'Framework', description: 'Security and Privacy Controls for Information Systems and Organizations', category: 'Security' },
+      { sys_id: 'sf_auth_doc_902', sysId: 'sf_auth_doc_902', name: 'PCI-DSS Payment Security Standard', number: 'PCI-DSS-4.0', type: 'Standard', description: 'Payment Card Industry Data Security Standard requirements', category: 'Compliance' }
+    ];
+  }
+
+  async getAuthorityDocument(sysId: string): Promise<any> {
+    const docs = await this.getAllAuthorityDocuments();
+    return docs.find(d => d.sys_id === sysId || d.sysId === sysId) || null;
+  }
+
+  async getAllObligations(): Promise<any[]> {
+    return [
+      { sys_id: 'sf_obl_501', name: 'Customer Data Encryption Obligation', description: 'Encrypt all cardholder and personal data at rest using AES-256.', reference: 'Req 3.4', document: '', document_name: '' },
+      { sys_id: 'sf_obl_502', name: 'Data Breach Notification Obligation', description: 'Report payment incidents within mandatory notification timelines.', reference: 'Req 12.10', document: 'sf_auth_doc_902', document_name: 'PCI-DSS Payment Security Standard' }
+    ];
+  }
+
+  async createCitationMapping(authorityDocSysId: string, obligationSysId: string, justification: string): Promise<boolean> {
+    console.log(`[SalesforceAdapter] Mapped obligation ${obligationSysId} to authority doc ${authorityDocSysId}: ${justification}`);
+    return true;
+  }
+
+  async createObligation(obligation: { name: string; description: string; document: string; source: string }): Promise<any> {
+    const created = {
+      sys_id: `sf_obl_${Date.now()}`,
+      name: obligation.name,
+      description: obligation.description,
+      document: obligation.document,
+      reference: obligation.name
+    };
+    console.log(`[SalesforceAdapter] Created obligation: ${obligation.name}`);
+    return created;
+  }
+
+  async writeAuthorityDocumentSummary(authorityDocSysId: string, text: string): Promise<boolean> {
+    console.log(`[SalesforceAdapter] Authority document ${authorityDocSysId} -> AI Recommendation narrative written.`);
+    return true;
+  }
 }

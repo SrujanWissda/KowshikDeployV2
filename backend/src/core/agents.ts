@@ -3494,6 +3494,784 @@ export class IssueIdentificationAgent {
 }
 
 // ============================================================================
+// 5. Authority Document Citation Agent
+// ============================================================================
+// Maps authority documents to obligations:
+// - Finds existing matching obligations (linked or unlinked)
+// - Creates new obligations for non-matching requirements
+// - Adds priority-based justification for recommendations
+// - Never creates duplicate obligations across authorities
+
+export class AuthorityDocumentCitationAgent {
+  private static readonly BATCH_SIZE = 40;
+  private static readonly DESC_LIMIT = 250;
+
+  constructor(private adapter: BaseGRCAdapter, private llm: BaseLLMClient) {}
+
+  async execute(targetId: string, options?: {
+    rawText?: string;
+    structuredFeed?: any;
+    scenario?: 'feed_reconciliation' | 'manual_maintenance' | 'greenfield_build';
+    previousVersionDocSysId?: string;
+  }): Promise<{
+    success: boolean;
+    message: string;
+    details: {
+      authorityName: string;
+      scenario: string;
+      isFirstPassGreenfield: boolean;
+      decomposedCount: number;
+      nonDutyCount: number;
+      existingMapped: number;
+      newCreated: number;
+      deltaSummary: { added: number; amended: number; withdrawn: number; unchanged: number };
+      decomposedObligations: any[];
+      classifiedNonDuties: any[];
+      staleObligations: any[];
+      feedDivergences: any[];
+      coverageSummary: string;
+      narrative: string;
+    };
+  }> {
+    const tracer = new AgentTracer();
+    tracer.log('START', { targetId, options });
+
+    // 1. FEM-RD-01: Ingest source text from DB record, raw text, or structured feed
+    let authorityName = 'Uploaded / Pasted Document';
+    let authorityRef = '';
+    let authorityType = 'Regulation / Standard';
+    let sourceContent = options?.rawText || '';
+    let docSysId = targetId;
+
+    if (options?.structuredFeed) {
+      sourceContent = typeof options.structuredFeed === 'string' ? options.structuredFeed : JSON.stringify(options.structuredFeed, null, 2);
+      authorityName = options.structuredFeed.title || options.structuredFeed.name || 'Structured Regulatory Feed';
+      authorityRef = options.structuredFeed.reference || options.structuredFeed.feed_id || '';
+    } else if (!sourceContent) {
+      const docDetails = await (this.adapter as any).getAuthorityDocumentDetails?.(targetId) ||
+                         await (this.adapter as any).getAuthorityDocument?.(targetId);
+      if (docDetails) {
+        authorityName = docDetails.name || 'Authority Document';
+        authorityRef = docDetails.number || docDetails.reference || '';
+        authorityType = docDetails.type || 'Regulation';
+        sourceContent = docDetails.source_payload || docDetails.description || '';
+        docSysId = docDetails.sys_id || targetId;
+      }
+    }
+
+    if (!sourceContent || sourceContent.trim().length === 0) {
+      sourceContent = `Authority Document: ${authorityName} (${authorityRef})\nRegulatory standard and compliance requirements under ${authorityName}.`;
+    }
+
+    // 2. Fetch existing library obligations for duplicate detection & stale reporting (FEM-RD-05, FEM-RD-09)
+    const existingObligations = await (this.adapter as any).getAllObligations?.() || [];
+    
+    // Check for previous version delta (FEM-RD-06)
+    let previousVersion: any = null;
+    if (options?.previousVersionDocSysId) {
+      previousVersion = await (this.adapter as any).getAuthorityDocumentDetails?.(options.previousVersionDocSysId);
+    } else {
+      previousVersion = await (this.adapter as any).getPreviousDocumentVersion?.(docSysId);
+    }
+
+    // Determine scenario (FEM-RD-08, FEM-RD-09, FEM-RD-10)
+    let scenario: 'feed_reconciliation' | 'manual_maintenance' | 'greenfield_build' = options?.scenario || 'manual_maintenance';
+    if (!options?.scenario) {
+      if (options?.structuredFeed) {
+        scenario = 'feed_reconciliation'; // FEM-RD-08
+      } else if (existingObligations.length === 0) {
+        scenario = 'greenfield_build'; // FEM-RD-10
+      } else {
+        scenario = 'manual_maintenance'; // FEM-RD-09
+      }
+    }
+
+    const isFirstPassGreenfield = scenario === 'greenfield_build';
+
+    tracer.log('INFO', {
+      authorityName,
+      scenario,
+      isFirstPassGreenfield,
+      sourceLength: sourceContent.length,
+      existingObligationsCount: existingObligations.length,
+      hasPreviousVersion: !!previousVersion
+    });
+
+    // 3. Format existing obligations for duplicate comparison
+    const existingSummary = existingObligations.slice(0, 100).map((o: any, idx: number) => {
+      return `[ID: ${o.sys_id || o.sysId || idx + 1}] "${o.name}" (Ref: ${o.reference || 'N/A'}): ${(o.description || '').substring(0, 150)}`;
+    }).join('\n');
+
+    // 4. Build prompt incorporating FEM-RD-01 to FEM-RD-10 criteria
+    const prompt = `You are an expert regulatory compliance architect performing Regulatory Decomposition (FEM-RD-01 to FEM-RD-10).
+
+SOURCE AUTHORITY DOCUMENT:
+Name: ${authorityName}
+Reference: ${authorityRef}
+Type: ${authorityType}
+Content:
+${sourceContent}
+
+${previousVersion ? `PREVIOUS VERSION DETAILS (FEM-RD-06):
+Version: ${previousVersion.version || 'Prior'}
+Description: ${previousVersion.description}\n` : ''}
+
+EXISTING OBLIGATION LIBRARY FOR DEDUPLICATION & RECONCILIATION:
+${existingSummary || '(Empty library - Greenfield build)'}
+
+OPERATIONAL SCENARIO:
+${scenario === 'feed_reconciliation' ? 'SCENARIO 1 (FEM-RD-08): Reconcile feed payload against single-duty rules, flag divergences, and propose corrections.' : ''}
+${scenario === 'manual_maintenance' ? 'SCENARIO 2 (FEM-RD-09): Decompose new source, detect near-duplicate clusters in library, and report stale obligations.' : ''}
+${scenario === 'greenfield_build' ? 'SCENARIO 3 (FEM-RD-10): Greenfield library build. Propose full structural hierarchy marked as first pass.' : ''}
+
+CRITICAL RULES:
+1. FEM-RD-02 (Single-Duty): Each obligation MUST represent exactly ONE atomic enforceable duty. If a passage contains multiple duties, split into distinct obligations.
+2. FEM-RD-03 (Source Structure): Retain full source hierarchy in 'citation_reference' (e.g., "Part 386 > Subpart B > § 386.11(b)").
+3. FEM-RD-04 (Classify Non-Obligation Text): Extract definitions, scope statements, recitals, and commentary into 'classified_non_obligations' with a clear exclusion reason. Do NOT silently drop them.
+4. FEM-RD-05 (Duplicate Detection): Compare against existing library. If a duty matches an existing record, set duplicate_status="exact_duplicate" and provide linked_existing_sys_id. If conceptually similar, mark "near_duplicate". Otherwise "unique".
+5. FEM-RD-06 (Delta on Change): If prior version is provided, classify change_type as "added", "amended", "withdrawn", or "unchanged" with change_rationale.
+6. FEM-RD-07 (Applicability Proposal): Propose 'in_scope' or 'out_of_scope' for the firm with compliance reasoning for reviewer determination.`;
+
+    const schema = {
+      type: 'OBJECT',
+      properties: {
+        decomposed_obligations: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              duty: { type: 'STRING' },
+              citation_reference: { type: 'STRING' },
+              source_snippet: { type: 'STRING' },
+              proposed_name: { type: 'STRING' },
+              proposed_description: { type: 'STRING' },
+              applicability_proposal: { type: 'STRING', enum: ['in_scope', 'out_of_scope'] },
+              applicability_rationale: { type: 'STRING' },
+              duplicate_status: { type: 'STRING', enum: ['unique', 'exact_duplicate', 'near_duplicate'] },
+              linked_existing_sys_id: { type: 'STRING' },
+              linked_existing_name: { type: 'STRING' },
+              change_type: { type: 'STRING', enum: ['added', 'amended', 'withdrawn', 'unchanged'] },
+              change_rationale: { type: 'STRING' }
+            },
+            required: ['duty', 'citation_reference', 'proposed_name', 'proposed_description', 'applicability_proposal', 'applicability_rationale']
+          }
+        },
+        classified_non_obligations: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              category: { type: 'STRING', enum: ['definition', 'scope_statement', 'recital', 'commentary', 'administrative', 'authority_preamble'] },
+              section_reference: { type: 'STRING' },
+              text_snippet: { type: 'STRING' },
+              exclusion_reason: { type: 'STRING' }
+            },
+            required: ['category', 'section_reference', 'text_snippet', 'exclusion_reason']
+          }
+        },
+        delta_summary: {
+          type: 'OBJECT',
+          properties: {
+            added: { type: 'INTEGER' },
+            amended: { type: 'INTEGER' },
+            withdrawn: { type: 'INTEGER' },
+            unchanged: { type: 'INTEGER' }
+          },
+          required: ['added', 'amended', 'withdrawn', 'unchanged']
+        },
+        stale_obligations: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              obligation_name: { type: 'STRING' },
+              sys_id: { type: 'STRING' },
+              reason: { type: 'STRING' }
+            },
+            required: ['obligation_name', 'reason']
+          }
+        },
+        feed_divergences: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              feed_obligation: { type: 'STRING' },
+              issue: { type: 'STRING' },
+              proposed_correction: { type: 'STRING' }
+            },
+            required: ['feed_obligation', 'issue', 'proposed_correction']
+          }
+        },
+        coverage_and_hierarchy_summary: { type: 'STRING' },
+        overall_compliance_analysis: { type: 'STRING' }
+      },
+      required: [
+        'decomposed_obligations',
+        'classified_non_obligations',
+        'delta_summary',
+        'coverage_and_hierarchy_summary',
+        'overall_compliance_analysis'
+      ]
+    };
+
+    let llmResult: any;
+    try {
+      llmResult = await this.llm.generateStructuredOutput<any>(
+        prompt,
+        'You are an expert regulatory decomposition specialist performing atomic single-duty extraction and compliance classification.',
+        schema
+      );
+    } catch (e: any) {
+      tracer.log('ERROR', { error: `LLM decomposition failed: ${e.message}` });
+      return {
+        success: false,
+        message: `Regulatory decomposition failed: ${e.message}`,
+        details: {
+          authorityName,
+          scenario,
+          isFirstPassGreenfield,
+          decomposedCount: 0,
+          nonDutyCount: 0,
+          existingMapped: 0,
+          newCreated: 0,
+          deltaSummary: { added: 0, amended: 0, withdrawn: 0, unchanged: 0 },
+          decomposedObligations: [],
+          classifiedNonDuties: [],
+          staleObligations: [],
+          feedDivergences: [],
+          coverageSummary: '',
+          narrative: ''
+        }
+      };
+    }
+
+    const decomposed = llmResult.decomposed_obligations || [];
+    const nonDuties = llmResult.classified_non_obligations || [];
+    const deltaSummary = llmResult.delta_summary || { added: decomposed.length, amended: 0, withdrawn: 0, unchanged: 0 };
+    const staleObligations = llmResult.stale_obligations || [];
+    const feedDivergences = llmResult.feed_divergences || [];
+
+    // 5. Persist decomposed single-duty obligations into ServiceNow / target GRC platform
+    let savedRecords: any[] = [];
+    if (typeof (this.adapter as any).saveDecomposedObligations === 'function') {
+      try {
+        savedRecords = await (this.adapter as any).saveDecomposedObligations(docSysId, decomposed);
+      } catch (err: any) {
+        tracer.log('WARN', { error: `Failed to persist decomposed obligations: ${err.message}` });
+      }
+    }
+
+    const existingMappedCount = decomposed.filter((d: any) => d.duplicate_status === 'exact_duplicate').length;
+    const newCreatedCount = decomposed.length - existingMappedCount;
+
+    // 6. Construct rich HTML narrative for u_ai_recommendation on Authority Document
+    const narrativeLines: string[] = [
+      `${htmlLabel('REGULATORY DECOMPOSITION & OBLIGATION MAPPING SUMMARY (FEM-RD-01 to FEM-RD-10):')}`,
+      `Evaluated authority document "${htmlEscape(authorityName)}"${authorityRef ? ` (${htmlEscape(authorityRef)})` : ''}.`,
+      `<strong>Scenario:</strong> ${htmlEscape(scenario.replace('_', ' ').toUpperCase())} | <strong>Single-Duty Obligations:</strong> ${decomposed.length} | <strong>Non-Duty Items Classified:</strong> ${nonDuties.length} | <strong>Linked Existing:</strong> ${existingMappedCount} | <strong>Proposed New:</strong> ${newCreatedCount}.`,
+      ''
+    ];
+
+    if (isFirstPassGreenfield) {
+      narrativeLines.push(`<div style="background-color:#fff3cd; border-left:4px solid #ffc107; padding:8px 12px; margin:6px 0;"><strong>⚠ FIRST PASS GREENFIELD BUILD (FEM-RD-10):</strong> Initial taxonomy and hierarchy constructed. Requires structural reviewer validation before downstream risk/control mapping runs.</div>`);
+    }
+
+    if (llmResult.overall_compliance_analysis) {
+      narrativeLines.push(`${htmlLabel('JUSTIFICATION & COMPLIANCE ANALYSIS:')}<br>${htmlEscape(llmResult.overall_compliance_analysis)}<br>`);
+    }
+
+    // Delta on Change (FEM-RD-06)
+    narrativeLines.push(`${htmlLabel('VERSION CHANGE SET DELTA (FEM-RD-06):')}<br>Added: ${deltaSummary.added} | Amended: ${deltaSummary.amended} | Withdrawn: ${deltaSummary.withdrawn} | Unchanged: ${deltaSummary.unchanged}<br>`);
+
+    // Decomposed single-duty obligations (FEM-RD-02, FEM-RD-03, FEM-RD-07)
+    if (decomposed.length > 0) {
+      narrativeLines.push(`${htmlLabel('DECOMPOSED SINGLE-DUTY OBLIGATIONS (FEM-RD-02, FEM-RD-03, FEM-RD-07):')}<br>` +
+        decomposed.map((o: any) => {
+          const appColor = o.applicability_proposal === 'in_scope' ? HTML_POSITIVE_COLOR : HTML_NEGATIVE_COLOR;
+          const appTag = `<span style="color:${appColor}"><b>[${o.applicability_proposal.toUpperCase()}]</b></span>`;
+          const dupTag = o.duplicate_status === 'exact_duplicate'
+            ? ` <span style="color:#6f42c1;"><b>[LINKED EXISTING]</b></span>`
+            : o.duplicate_status === 'near_duplicate'
+            ? ` <span style="color:#fd7e14;"><b>[NEAR-DUPLICATE]</b></span>`
+            : '';
+
+          return `• <strong>${htmlEscape(o.proposed_name)}</strong>${dupTag} — ${appTag}<br>` +
+                 `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Citation Hierarchy:</strong> <code>${htmlEscape(o.citation_reference)}</code><br>` +
+                 `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Atomic Duty:</strong> <em>${htmlEscape(o.duty)}</em><br>` +
+                 `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Applicability Rationale:</strong> ${htmlEscape(o.applicability_rationale)}` +
+                 (o.change_rationale ? `<br>&nbsp;&nbsp;&nbsp;&nbsp;<strong>Change Note:</strong> ${htmlEscape(o.change_rationale)}` : '');
+        }).join('<br><br>')
+      );
+    }
+
+    // Classified Non-Duty Text (FEM-RD-04)
+    if (nonDuties.length > 0) {
+      narrativeLines.push(`<br>${htmlLabel('CLASSIFIED NON-OBLIGATION CONTENT (FEM-RD-04 - Set Aside with Stated Reason):')}<br>` +
+        nonDuties.map((n: any) =>
+          `• <strong>[${htmlEscape(n.category.toUpperCase())}]</strong> ${htmlEscape(n.section_reference)}: <em>"${htmlEscape(n.text_snippet.substring(0, 120))}"</em><br>&nbsp;&nbsp;&nbsp;&nbsp;<strong>Exclusion Reason:</strong> ${htmlEscape(n.exclusion_reason)}`
+        ).join('<br>')
+      );
+    }
+
+    // Feed Divergences (FEM-RD-08)
+    if (feedDivergences.length > 0) {
+      narrativeLines.push(`<br>${htmlLabel('⚠ FEED RECONCILIATION DIVERGENCES (FEM-RD-08):')}<br>` +
+        feedDivergences.map((f: any) =>
+          `• <strong>${htmlEscape(f.feed_obligation)}</strong>: ${htmlEscape(f.issue)} ➔ <em>Correction: ${htmlEscape(f.proposed_correction)}</em>`
+        ).join('<br>')
+      );
+    }
+
+    // Stale Obligations (FEM-RD-09)
+    if (staleObligations.length > 0) {
+      narrativeLines.push(`<br>${htmlLabel('⚠ STALE LIBRARY OBLIGATIONS DETECTED (FEM-RD-09):')}<br>` +
+        staleObligations.map((s: any) =>
+          `• <strong>${htmlEscape(s.obligation_name)}</strong>: ${htmlEscape(s.reason)}`
+        ).join('<br>')
+      );
+    }
+
+    if (llmResult.coverage_and_hierarchy_summary) {
+      narrativeLines.push(`<br>${htmlLabel('TAXONOMY & HIERARCHY COVERAGE:')}<br>${htmlEscape(llmResult.coverage_and_hierarchy_summary)}`);
+    }
+
+    const narrative = narrativeLines.join('<br>');
+
+    // 7. Write narrative back to authority document's u_ai_recommendation
+    const rawWriteDocSummary = (this.adapter as any).writeAuthorityDocumentSummary;
+    if (typeof rawWriteDocSummary === 'function' && docSysId) {
+      try {
+        await writeVerified(tracer, `authority document ${docSysId} u_ai_recommendation`, () =>
+          rawWriteDocSummary.call(this.adapter, docSysId, narrative)
+        );
+      } catch (err: any) {
+        tracer.log('WARN', { error: `Failed writing u_ai_recommendation on authority document: ${err.message}` });
+      }
+    }
+
+    // 8. Observability trace
+    const writeTraceM = (this.adapter as any).writeObservabilityTrace;
+    if (typeof writeTraceM === 'function') {
+      try {
+        await writeTraceM.call(this.adapter, {
+          agentName: 'AuthorityDocumentCitationAgent',
+          targetId: docSysId,
+          outcome: 'decomposed',
+          results: {
+            scenario,
+            decomposedCount: decomposed.length,
+            nonDutyCount: nonDuties.length,
+            existingMapped: existingMappedCount,
+            newCreated: newCreatedCount,
+            deltaSummary
+          },
+          html: tracer.renderHtml('AuthorityDocumentCitationAgent', authorityName),
+          summary: `Decomposed ${decomposed.length} single-duty obligations (${newCreatedCount} new, ${existingMappedCount} linked), classified ${nonDuties.length} non-duty items`
+        });
+      } catch (_) { /* observability is best-effort */ }
+    }
+
+    const result = {
+      success: true,
+      message: `Decomposed ${decomposed.length} single-duty obligation(s) (${newCreatedCount} proposed new, ${existingMappedCount} linked existing), classified ${nonDuties.length} non-obligation item(s)`,
+      details: {
+        authorityName,
+        scenario,
+        isFirstPassGreenfield,
+        decomposedCount: decomposed.length,
+        nonDutyCount: nonDuties.length,
+        existingMapped: existingMappedCount,
+        newCreated: newCreatedCount,
+        deltaSummary,
+        decomposedObligations: decomposed,
+        classifiedNonDuties: nonDuties,
+        staleObligations,
+        feedDivergences,
+        coverageSummary: llmResult.coverage_and_hierarchy_summary || '',
+        narrative
+      }
+    };
+
+    tracer.log('COMPLETE', result);
+    return result;
+  }
+}
+
+// ============================================================================
+// 6. Citation to Risk Mapping Agent  (FEM-OC-01 to FEM-OC-06)
+//
+// Given a single citation / obligation, this agent:
+//   OC-01 — Produces RANKED candidate risks with per-candidate rationale
+//   OC-02 — Treats "no adequate risk exists" as a first-class outcome
+//   OC-03 — Drafts new risk records for uncovered entity/process gaps
+//   OC-04 — Produces a standing coverage report (obligations vs confirmed risks)
+//   OC-05 — Detects over-mapping: flags risks linked to too many obligations
+//   OC-06 — Maps at the join layer (u_citations on sn_risk_risk), not raw records
+// ============================================================================
+export class CitationRiskMappingAgent {
+  private static readonly OVER_MAPPING_THRESHOLD = 4;
+
+  constructor(private adapter: BaseGRCAdapter, private llm: BaseLLMClient) {}
+
+  async execute(citationSysId: string): Promise<{
+    success: boolean;
+    message: string;
+    details: {
+      citationName: string;
+      entitiesEvaluated: number;
+      existingRisksMapped: number;
+      draftRisksCreated: number;
+      noMatchEntities: number;
+      overMappedRisks: Array<{ riskName: string; riskSysId: string; citationCount: number }>;
+      rankedCandidates: Array<{
+        risk_name: string;
+        entity_name: string;
+        confidence_score: number;
+        is_adequate_match: boolean;
+        rationale: string;
+        action: 'linked' | 'no_match';
+      }>;
+      draftRisks: Array<{
+        entity_name: string;
+        proposed_risk_name: string;
+        proposed_description: string;
+        gap_rationale: string;
+      }>;
+      coverageSummary: string;
+      narrative?: string;
+    };
+  }> {
+    const tracer = new AgentTracer();
+    tracer.log('START', { citationSysId });
+
+    // 1. Fetch the target citation/obligation
+    const citation = await (this.adapter as any).getCitation?.(citationSysId);
+    if (!citation) {
+      tracer.log('ERROR', { error: 'Citation / obligation not found' });
+      return {
+        success: false,
+        message: 'Citation / obligation not found',
+        details: {
+          citationName: '', entitiesEvaluated: 0, existingRisksMapped: 0,
+          draftRisksCreated: 0, noMatchEntities: 0, overMappedRisks: [],
+          rankedCandidates: [], draftRisks: [], coverageSummary: ''
+        }
+      };
+    }
+    tracer.log('INFO', { citationName: citation.name, reference: citation.reference });
+
+    // 2. Fetch all entities (business processes / profiles) and all existing risks
+    const entities = await (this.adapter as any).getAllEntities?.() || [];
+    const allRisks = await this.adapter.getAllRisks();
+    tracer.log('INFO', { entityCount: entities.length, totalRisks: allRisks.length });
+
+    // 3. FEM-OC-05: Pre-scan for over-mapped risks (too many obligations on one risk)
+    const overMappedRisks: Array<{ riskName: string; riskSysId: string; citationCount: number }> = [];
+    for (const risk of allRisks) {
+      const citationIds = ((risk as any).u_citations || (risk as any).citations || '').split(',').map((s: string) => s.trim()).filter(Boolean);
+      if (citationIds.length >= CitationRiskMappingAgent.OVER_MAPPING_THRESHOLD) {
+        overMappedRisks.push({
+          riskName: risk.name,
+          riskSysId: risk.sysId,
+          citationCount: citationIds.length
+        });
+      }
+    }
+    if (overMappedRisks.length > 0) {
+      tracer.log('WARN', { overMappedRisks: overMappedRisks.length, threshold: CitationRiskMappingAgent.OVER_MAPPING_THRESHOLD });
+    }
+
+    // 4. LLM evaluation: rank candidate risks per entity for this obligation
+    const riskSummaries = allRisks.map((r: any, i: number) => {
+      const entityName = r.profileName || entities.find((e: any) => e.sysId === r.profileSysId)?.name || 'Unknown';
+      const existingCitations = ((r as any).u_citations || (r as any).citations || '').split(',').filter(Boolean).length;
+      return `[${i + 1}] Risk: "${r.name}" | Entity: "${entityName}" | Description: ${(r.description || '').substring(0, 200)} | Existing obligation links: ${existingCitations}`;
+    }).join('\n');
+
+    const entitySummaries = entities.map((e: any) => `"${e.name}" (${e.type || 'Business Process'}): ${(e.description || '').substring(0, 150)}`).join('\n');
+
+    const prompt = `You are a GRC compliance analyst performing Citation-to-Risk mapping.
+
+OBLIGATION/CITATION:
+Name: ${citation.name}
+Reference: ${citation.reference || 'N/A'}
+Description: ${citation.description}
+
+ALL ORGANIZATIONAL ENTITIES/PROCESSES:
+${entitySummaries}
+
+ALL EXISTING RISKS IN THE RISK LIBRARY:
+${riskSummaries || '(No existing risks)'}
+
+INSTRUCTIONS — Follow these requirements exactly:
+
+1. RANKED CANDIDATES (FEM-OC-01): For EACH existing risk, evaluate if it is breachable by this obligation. Return a ranked list with confidence scores (0.0–1.0) and per-candidate rationale. Consider that ONE obligation can create DIFFERENT risks in DIFFERENT entities. ONE risk may breach SEVERAL obligations.
+
+2. NO-MATCH IS FIRST-CLASS (FEM-OC-02): If no existing risk adequately matches for a given entity, set is_adequate_match=false. Do NOT force a low-confidence match. "No adequate risk exists" is a valid, explicit outcome.
+
+3. DRAFT RISK ON GAP (FEM-OC-03): For entities where no adequate existing risk matches, propose a DRAFT risk with a specific name, description, and gap rationale. The draft risk should be specific to that entity's operational context.
+
+4. COVERAGE SUMMARY (FEM-OC-04): Write a brief coverage summary stating which entities have confirmed risk coverage for this obligation and which do not.
+
+5. OVER-MAPPING WARNING (FEM-OC-05): If any risk in ranked_candidates already has ${CitationRiskMappingAgent.OVER_MAPPING_THRESHOLD}+ obligation links, note this in its rationale as a potential over-mapping concern.
+
+6. JOIN LAYER (FEM-OC-06): All mappings are proposed for the u_citations join field on the risk record, not as direct record modifications.
+
+Return JSON with this exact structure:
+{
+  "ranked_candidates": [
+    {
+      "risk_index": 1,
+      "risk_name": "...",
+      "entity_name": "...",
+      "confidence_score": 0.85,
+      "is_adequate_match": true,
+      "rationale": "..."
+    }
+  ],
+  "draft_risks_on_gap": [
+    {
+      "entity_name": "...",
+      "profile_sys_id": "...",
+      "proposed_risk_name": "...",
+      "proposed_description": "...",
+      "gap_rationale": "...",
+      "category": "Regulatory / Compliance"
+    }
+  ],
+  "coverage_summary": "...",
+  "overall_analysis": "..."
+}`;
+
+    const schema = {
+      type: 'OBJECT',
+      properties: {
+        ranked_candidates: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              risk_index: { type: 'INTEGER' },
+              risk_name: { type: 'STRING' },
+              entity_name: { type: 'STRING' },
+              confidence_score: { type: 'NUMBER' },
+              is_adequate_match: { type: 'BOOLEAN' },
+              rationale: { type: 'STRING' }
+            },
+            required: ['risk_index', 'risk_name', 'entity_name', 'confidence_score', 'is_adequate_match', 'rationale']
+          }
+        },
+        draft_risks_on_gap: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              entity_name: { type: 'STRING' },
+              profile_sys_id: { type: 'STRING' },
+              proposed_risk_name: { type: 'STRING' },
+              proposed_description: { type: 'STRING' },
+              gap_rationale: { type: 'STRING' },
+              category: { type: 'STRING' }
+            },
+            required: ['entity_name', 'proposed_risk_name', 'proposed_description', 'gap_rationale']
+          }
+        },
+        coverage_summary: { type: 'STRING' },
+        overall_analysis: { type: 'STRING' }
+      },
+      required: ['ranked_candidates', 'draft_risks_on_gap', 'coverage_summary', 'overall_analysis']
+    };
+
+    let llmResult: any;
+    try {
+      llmResult = await this.llm.generateStructuredOutput<any>(
+        prompt,
+        'You are a GRC compliance analyst performing citation-to-risk mapping with ranked candidate evaluation.',
+        schema
+      );
+    } catch (e: any) {
+      tracer.log('ERROR', { error: `LLM evaluation failed: ${e.message}` });
+      return {
+        success: false,
+        message: `AI evaluation failed: ${e.message}`,
+        details: {
+          citationName: citation.name, entitiesEvaluated: entities.length,
+          existingRisksMapped: 0, draftRisksCreated: 0, noMatchEntities: 0,
+          overMappedRisks, rankedCandidates: [], draftRisks: [],
+          coverageSummary: ''
+        }
+      };
+    }
+
+    tracer.log('INFO', {
+      rankedCandidates: (llmResult.ranked_candidates || []).length,
+      draftRisks: (llmResult.draft_risks_on_gap || []).length
+    });
+
+    // 5. Execute mappings: link adequate matches via u_citations (FEM-OC-06)
+    const rankedCandidates: any[] = [];
+    let existingRisksMapped = 0;
+    let unmatchedCandidateRisks = 0;
+
+    for (const candidate of (llmResult.ranked_candidates || [])) {
+      const riskIdx = candidate.risk_index - 1;
+      const risk = allRisks[riskIdx];
+
+      if (candidate.is_adequate_match && risk) {
+        // FEM-OC-06: Write at the join layer
+        await (this.adapter as any).linkCitationToRisk?.(
+          risk.sysId,
+          citationSysId,
+          `Citation "${citation.name}" mapped to risk "${risk.name}" (confidence: ${candidate.confidence_score}): ${candidate.rationale}`
+        );
+        existingRisksMapped++;
+        rankedCandidates.push({ ...candidate, action: 'linked' });
+        tracer.log('INFO', { action: 'linked', risk: risk.name, confidence: candidate.confidence_score });
+      } else {
+        // FEM-OC-02: Explicit no-match
+        if (!candidate.is_adequate_match) unmatchedCandidateRisks++;
+        rankedCandidates.push({ ...candidate, action: 'no_match' });
+      }
+    }
+
+    // 6. FEM-OC-03: Create draft risks for gap entities
+    const draftRisks: any[] = [];
+    for (const draft of (llmResult.draft_risks_on_gap || [])) {
+      // Resolve profile_sys_id from entity name if not provided by LLM
+      let profileSysId = draft.profile_sys_id || '';
+      if (!profileSysId) {
+        const entity = entities.find((e: any) =>
+          e.name.toLowerCase() === (draft.entity_name || '').toLowerCase()
+        );
+        if (entity) profileSysId = entity.sysId;
+      }
+
+      if (profileSysId) {
+        const created = await (this.adapter as any).createRiskForEntity?.({
+          name: draft.proposed_risk_name,
+          description: draft.proposed_description,
+          profileSysId,
+          citationSysId,
+          justification: `[DRAFT] ${draft.gap_rationale}`,
+          draft: true,
+          category: draft.category || 'Regulatory / Compliance'
+        });
+
+        if (created) {
+          draftRisks.push({
+            entity_name: draft.entity_name,
+            proposed_risk_name: draft.proposed_risk_name,
+            proposed_description: draft.proposed_description,
+            gap_rationale: draft.gap_rationale
+          });
+          tracer.log('INFO', { action: 'draft_created', entity: draft.entity_name, risk: draft.proposed_risk_name });
+        }
+      }
+    }
+
+    // 7. Build narrative for u_ai_recommendation on the citation record
+    const narrativeLines = [
+      `${htmlLabel('CITATION TO RISK MAPPING SUMMARY:')} Evaluated citation "${htmlEscape(citation.name)}"${citation.reference ? ` (${htmlEscape(citation.reference)})` : ''} across ${entities.length} organizational entities (${allRisks.length} library risks evaluated).`,
+      `${htmlLabel('Mapped:')} ${existingRisksMapped} existing risk(s). ${htmlLabel('Drafted on Gaps:')} ${draftRisks.length} new risk(s). ${htmlLabel('Unmatched Candidate Risks:')} ${unmatchedCandidateRisks}.`,
+      ''
+    ];
+
+    if (llmResult.overall_analysis) {
+      narrativeLines.push(`${htmlLabel('JUSTIFICATION & COMPLIANCE RATIONALE:')}<br>${htmlEscape(llmResult.overall_analysis)}<br>`);
+    }
+
+    if (rankedCandidates.length > 0) {
+      narrativeLines.push(`${htmlLabel('RANKED CANDIDATE EVALUATION & MAPPING JUSTIFICATIONS:')}<br>` +
+        rankedCandidates
+          .sort((a, b) => b.confidence_score - a.confidence_score)
+          .map(c => {
+            const actionTag = c.action === 'linked'
+              ? `<span style="color:${HTML_POSITIVE_COLOR}"><b>✓ LINKED</b></span>`
+              : `<span style="color:${HTML_NEGATIVE_COLOR}"><b>✗ NO MATCH</b></span>`;
+            return `${actionTag} ${htmlEscape(c.risk_name)} (${htmlEscape(c.entity_name)}) — Confidence: ${(c.confidence_score * 100).toFixed(0)}%<br>&nbsp;&nbsp;&nbsp;&nbsp;<strong>Justification:</strong> <em>${htmlEscape(c.rationale)}</em>`;
+          }).join('<br>')
+      );
+    }
+
+    if (draftRisks.length > 0) {
+      narrativeLines.push(`<br>${htmlLabel('DRAFT RISKS CREATED ON GAPS (FEM-OC-03):')}<br>` +
+        draftRisks.map(d =>
+          `• <strong>${htmlEscape(d.proposed_risk_name)}</strong> → ${htmlEscape(d.entity_name)}<br>&nbsp;&nbsp;&nbsp;&nbsp;<strong>Gap Justification:</strong> <em>${htmlEscape(d.gap_rationale)}</em><br>&nbsp;&nbsp;&nbsp;&nbsp;<strong>Description:</strong> ${htmlEscape(d.proposed_description)}`
+        ).join('<br>')
+      );
+    }
+
+    if (overMappedRisks.length > 0) {
+      narrativeLines.push(`<br>${htmlLabel('⚠ OVER-MAPPING WARNINGS (FEM-OC-05):')}<br>` +
+        overMappedRisks.map(o =>
+          `• <strong>${htmlEscape(o.riskName)}</strong> has ${o.citationCount} obligation links (threshold: ${CitationRiskMappingAgent.OVER_MAPPING_THRESHOLD})`
+        ).join('<br>')
+      );
+    }
+
+    if (llmResult.coverage_summary) {
+      narrativeLines.push(`<br>${htmlLabel('COVERAGE REPORT (FEM-OC-04):')}<br>${htmlEscape(llmResult.coverage_summary)}`);
+    }
+
+    const narrative = narrativeLines.join('<br>');
+
+    // 8. Write narrative to the citation's u_ai_recommendation
+    const rawWriteCitationSummary = (this.adapter as any).writeCitationSummary;
+    if (typeof rawWriteCitationSummary === 'function') {
+      try {
+        await writeVerified(tracer, `citation ${citationSysId} u_ai_recommendation`, () =>
+          rawWriteCitationSummary.call(this.adapter, citationSysId, narrative)
+        );
+      } catch (err: any) {
+        tracer.log('WARN', { error: `Failed writing u_ai_recommendation on citation: ${err.message}` });
+      }
+    }
+
+    // 9. Observability trace
+    const writeTraceM = (this.adapter as any).writeObservabilityTrace;
+    if (typeof writeTraceM === 'function') {
+      try {
+        await writeTraceM.call(this.adapter, {
+          agentName: 'CitationRiskMappingAgent',
+          targetId: citationSysId,
+          outcome: 'mapped',
+          results: {
+            existingRisksMapped,
+            draftRisksCreated: draftRisks.length,
+            unmatchedCandidateRisks,
+            overMappedRisks: overMappedRisks.length
+          },
+          html: tracer.renderHtml('CitationRiskMappingAgent', citation.name || citationSysId),
+          summary: `Mapped ${existingRisksMapped} risks, drafted ${draftRisks.length}, ${unmatchedCandidateRisks} unmatched candidate risks`
+        });
+      } catch (_) { /* observability is best-effort */ }
+    }
+
+    const result = {
+      success: true,
+      message: `Mapped ${existingRisksMapped} existing risk(s), drafted ${draftRisks.length} new risk(s), ${unmatchedCandidateRisks} unmatched candidate risk(s)`,
+      details: {
+        citationName: citation.name,
+        entitiesEvaluated: entities.length,
+        existingRisksMapped,
+        draftRisksCreated: draftRisks.length,
+        noMatchEntities: unmatchedCandidateRisks,
+        unmatchedCandidateRisks,
+        overMappedRisks,
+        rankedCandidates,
+        draftRisks,
+        coverageSummary: llmResult.coverage_summary || '',
+        narrative
+      }
+    };
+
+    tracer.log('COMPLETE', result);
+    return result;
+  }
+}
+
+// ============================================================================
 // Note: Schema Discovery / onboarding has moved to
 // UniversalSchemaDiscoveryAgent (core/universal_schema_discovery_agent.ts),
 // which adds live introspection, vector-based concept matching, and

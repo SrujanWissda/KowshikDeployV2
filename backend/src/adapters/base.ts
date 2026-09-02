@@ -12,6 +12,9 @@ export abstract class BaseGRCAdapter {
   getFieldRelationships(): FieldRelationship[] | undefined { return undefined; }
 
   // Read Operations
+  abstract getAllRisks(): Promise<Risk[]>;
+  async getAllAssessmentInstances(agent?: string): Promise<any[]> { return []; }
+  async getAllAuthorityDocuments(): Promise<any[]> { return []; }
   abstract getEntityIssues(profileSysId: string): Promise<Array<{ desc: string; state: string; number?: string; priority?: string }>>;
   abstract getRisk(riskSysId: string): Promise<Risk | null>;
   abstract getControlsForEntity(profileSysId: string): Promise<Control[]>;
@@ -67,4 +70,69 @@ export abstract class BaseGRCAdapter {
   ): Promise<boolean>;
 
   abstract writeFailure(rowSysId: string, reason: string): Promise<void>;
+
+  // Entity & Citation Operations (FEM-OC-01 through FEM-OC-06)
+  async getAllEntities(): Promise<Array<{ sysId: string; name: string; type?: string; description?: string }>> {
+    return [];
+  }
+  async getCitation(citationSysId: string): Promise<any> {
+    return null;
+  }
+  async getAllObligations(): Promise<any[]> {
+    return [];
+  }
+  async linkCitationToRisk(riskSysId: string, citationSysId: string, justification: string): Promise<boolean> {
+    return true;
+  }
+  async createRiskForEntity(risk: {
+    name: string;
+    description: string;
+    profileSysId: string;
+    citationSysId: string;
+    justification?: string;
+    draft?: boolean;
+    category?: string;
+  }): Promise<any> {
+    return null;
+  }
+  async writeCitationSummary(citationSysId: string, narrativeHtml: string): Promise<boolean> {
+    return true;
+  }
+
+  // Regulatory Decomposition Operations (FEM-RD-01 through FEM-RD-10)
+  async getAuthorityDocument(authorityDocSysId: string): Promise<any> {
+    return null;
+  }
+  async getAuthorityDocumentDetails(docSysId: string): Promise<{
+    sys_id: string;
+    name: string;
+    number?: string;
+    type?: string;
+    description: string;
+    version?: string;
+    source_payload?: string;
+  } | null> {
+    return null;
+  }
+  async getPreviousDocumentVersion(docSysId: string): Promise<{
+    sys_id: string;
+    name: string;
+    version?: string;
+    description: string;
+  } | null> {
+    return null;
+  }
+  async saveDecomposedObligations(docSysId: string, obligations: Array<{
+    duty: string;
+    citation_reference: string;
+    proposed_name: string;
+    proposed_description: string;
+    applicability_proposal: string;
+    applicability_rationale: string;
+    duplicate_status?: string;
+    linked_existing_sys_id?: string;
+    change_type?: string;
+  }>): Promise<any[]> {
+    return [];
+  }
 }

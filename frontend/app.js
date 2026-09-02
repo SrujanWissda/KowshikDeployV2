@@ -43,7 +43,15 @@ const localData = {
   servicenow: {
     targets: [
       { id: 'inst_301', name: 'Assessment Instance (inst_301) - Core DB Cluster' },
-      { id: 'risk_001', name: 'Risk Record (risk_001) - Unauthorized DB Access' }
+      { id: 'risk_001', name: 'Risk Record (risk_001) - Unauthorized DB Access' },
+      { id: 'auth_doc_001', name: 'Authority Document (auth_doc_001) - Basel III Framework' },
+      { id: 'auth_doc_002', name: 'Authority Document (auth_doc_002) - GDPR Compliance' },
+      { id: 'auth_doc_003', name: 'Authority Document (auth_doc_003) - SOX Section 404' },
+      { id: 'obl_001', name: 'Obligation (obl_001) - Customer Data Protection' },
+      { id: 'obl_002', name: 'Obligation (obl_002) - Data Breach Notification' },
+      { id: 'obl_003', name: 'Obligation (obl_003) - Internal Control Audit Trail' },
+      { id: 'obl_004', name: 'Obligation (obl_004) - Privileged Access & Separation of Duties' },
+      { id: 'obl_005', name: 'Obligation (obl_005) - Third-Party Vendor Risk Governance' }
     ],
     rawRecords: {
       inst_301: {
@@ -66,13 +74,71 @@ const localData = {
           { sys_id: 'ctrl_102', name: 'Multi-Factor Authentication', description: 'Enforce MFA for all user logins, including admin shell accesses.', active: true },
           { sys_id: 'ctrl_103', name: 'Daily Backup Integrity Tests', description: 'Verify integrity of backups daily.', active: true }
         ]
+      },
+      auth_doc_001: {
+        sys_id: 'auth_doc_001',
+        name: 'Basel III Framework',
+        number: 'AD001',
+        type: 'Regulation',
+        description: 'Basel III regulatory framework for banking supervision and capital adequacy.'
+      },
+      auth_doc_002: {
+        sys_id: 'auth_doc_002',
+        name: 'GDPR Compliance',
+        number: 'AD002',
+        type: 'Regulation',
+        description: 'General Data Protection Regulation standards for personal data privacy and governance.'
+      },
+      auth_doc_003: {
+        sys_id: 'auth_doc_003',
+        name: 'SOX Section 404',
+        number: 'AD003',
+        type: 'Statute',
+        description: 'Sarbanes-Oxley Act Management Assessment of Internal Controls.'
+      },
+      obl_001: {
+        sys_id: 'obl_001',
+        name: 'Customer Data Protection Obligation',
+        reference: 'Section 4.1',
+        description: 'Ensure customer PII and sensitive financial data are encrypted at rest and in transit across all databases and communication pipelines.',
+        document: 'auth_doc_002'
+      },
+      obl_002: {
+        sys_id: 'obl_002',
+        name: 'Data Breach Notification Obligation',
+        reference: 'Article 33',
+        description: 'Notify supervisory authorities and affected customers within 72 hours of becoming aware of a personal data breach or reporting failure.',
+        document: 'auth_doc_002'
+      },
+      obl_003: {
+        sys_id: 'obl_003',
+        name: 'Internal Control Audit Trail Obligation',
+        reference: 'Section 404(a)',
+        description: 'Maintain immutable audit trails for financial transaction records, user privilege escalations, and system configuration changes.',
+        document: 'auth_doc_003'
+      },
+      obl_004: {
+        sys_id: 'obl_004',
+        name: 'Privileged Access & Segregation of Duties Obligation',
+        reference: 'Basel Section 5.3',
+        description: 'Enforce strict role-based access control (RBAC), multi-factor authentication, and separation of duties for all production administration.',
+        document: 'auth_doc_001'
+      },
+      obl_005: {
+        sys_id: 'obl_005',
+        name: 'Third-Party Vendor Risk & SLA Governance',
+        reference: 'Section 9.4',
+        description: 'Conduct mandatory security assessments and continuous compliance monitoring for all external contractors, sub-processors, and cloud service providers.',
+        document: 'auth_doc_001'
       }
     }
   },
   salesforce: {
     targets: [
       { id: 'sf_asmt_701', name: 'Assessment Instance (sf_asmt_701) - Cloud S3' },
-      { id: 'sf_risk_901', name: 'Risk Record (sf_risk_901) - Data Leak via S3' }
+      { id: 'sf_risk_901', name: 'Risk Record (sf_risk_901) - Data Leak via S3' },
+      { id: 'sf_auth_doc_901', name: 'Authority Document (sf_auth_doc_901) - NIST SP 800-53' },
+      { id: 'sf_obl_501', name: 'Obligation (sf_obl_501) - Customer Data Protection' }
     ],
     rawRecords: {
       sf_asmt_701: {
@@ -93,6 +159,17 @@ const localData = {
           { Id: 'sf_ctrl_801', Name__c: 'S3 Block Public Access Policy', Description__c: 'Enforce AWS Organizations policy to block all public bucket access.', Active__c: true },
           { Id: 'sf_ctrl_802', Name__c: 'CloudTrail Audit Logging', Description__c: 'Log all API operations on AWS and review weekly.', Active__c: true }
         ]
+      },
+      sf_auth_doc_901: {
+        Id: 'sf_auth_doc_901',
+        Name: 'NIST SP 800-53',
+        Description__c: 'Security and Privacy Controls for Information Systems and Organizations.'
+      },
+      sf_obl_501: {
+        Id: 'sf_obl_501',
+        Name: 'Customer Data Protection',
+        Description__c: 'Encrypt all customer databases and backup repositories.',
+        Document__c: 'sf_auth_doc_901'
       }
     }
   }
@@ -186,7 +263,9 @@ const platformList = [
 const agentList = [
   { id: 'control-effectiveness', name: 'Control Effectiveness Agent', desc: 'Batch evaluates control effectiveness from test evidence and audits' },
   { id: 'inherent-assessment', name: 'Inherent Assessment Agent', desc: 'Assesses inherent factor risk (PII classification, environment) using guidance' },
-  { id: 'risk-control-mapping', name: 'Risk-Control Mapping Agent', desc: 'Maps relevant entity control records from compliance library' }
+  { id: 'risk-control-mapping', name: 'Risk-Control Mapping Agent', desc: 'Maps relevant entity control records from compliance library' },
+  { id: 'authority-document-citation', name: 'LRR Obligation Mapping Agent', desc: 'Maps authority documents to obligations with semantic matching and priority analysis' },
+  { id: 'citation-risk-mapping', name: 'Citation to Risk Mapping Agent', desc: 'Maps citations/obligations to breachable entity risks with ranked candidate evaluation, gap identification, and over-mapping detection' }
 ];
 
 function loadDropdownsMock() {
@@ -247,6 +326,46 @@ async function updateTargets() {
             .join('');
           return;
         }
+      } else if (agent === 'authority-document-citation' || agent === 'lrr-obligation-mapping') {
+        // --- Live authority documents (for LRR Obligation Mapping Agent) ---
+        selectTarget.innerHTML = '<option disabled>⏳ Loading live authority documents...</option>';
+        const res = await fetch(withInstanceId(`${API_BASE}/platforms/${platform}/authority-documents`));
+        const data = await res.json();
+        const docs = data.documents || data.authorityDocuments || [];
+        if (data.success && docs && docs.length > 0) {
+          selectTarget.innerHTML = docs
+            .map(d => {
+              const docId = typeof d === 'object' ? (d.sysId || d.sys_id || (typeof d.id === 'string' ? d.id : (d.id?.value || ''))) : String(d);
+              const docName = (typeof d.name === 'string' ? d.name : (d.name?.display_value || d.name?.value)) ||
+                              (typeof d.title === 'string' ? d.title : (d.title?.display_value || d.title?.value)) ||
+                              (typeof d.number === 'string' ? d.number : (d.number?.display_value || d.number?.value)) ||
+                              'Unnamed Document';
+              const docNumber = typeof d.number === 'string' ? d.number : (d.number?.display_value || d.number?.value || '');
+              const label = docNumber && !docName.includes(docNumber) ? `${docName} (${docNumber})` : docName;
+              return `<option value="${docId}">${label}</option>`;
+            })
+            .join('');
+          return;
+        }
+        console.warn(`[updateTargets] No authority documents found on ${platform}, using mock data.`);
+      } else if (agent === 'citation-risk-mapping') {
+        // --- Live citations / obligations (for Citation to Risk Mapping Agent) ---
+        selectTarget.innerHTML = '<option disabled>⏳ Loading live citations/obligations...</option>';
+        const res = await fetch(withInstanceId(`${API_BASE}/platforms/${platform}/citations`));
+        const data = await res.json();
+        const cits = data.citations || [];
+        if (data.success && cits && cits.length > 0) {
+          selectTarget.innerHTML = cits
+            .map(c => {
+              const citId = typeof c === 'object' ? (c.sys_id || c.sysId || c.id) : String(c);
+              const citName = (typeof c === 'object' ? (c.name || c.short_description || c.reference) : String(c)) || 'Unnamed Citation';
+              const ref = c.reference ? ` (${c.reference})` : '';
+              return `<option value="${citId}">${citName}${ref}</option>`;
+            })
+            .join('');
+          return;
+        }
+        console.warn(`[updateTargets] No citations found on ${platform}, using mock data.`);
       } else {
         // --- Live assessment instances (for control-effectiveness & inherent-assessment) ---
         selectTarget.innerHTML = '<option disabled>⏳ Loading live assessments...</option>';
@@ -270,6 +389,10 @@ async function updateTargets() {
   let filtered = [];
   if (agent === 'risk-control-mapping') {
     filtered = targets.filter(t => t.id.includes('risk'));
+  } else if (agent === 'authority-document-citation' || agent === 'lrr-obligation-mapping') {
+    filtered = targets.filter(t => t.id.includes('auth') || t.id.includes('doc'));
+  } else if (agent === 'citation-risk-mapping') {
+    filtered = targets.filter(t => t.id.includes('obl') || t.id.includes('cit'));
   } else {
     filtered = targets.filter(t => t.id.includes('inst') || t.id.includes('asmt'));
   }
@@ -894,6 +1017,69 @@ async function runLiveAgent(platform, agent, targetId) {
       `Factors evaluated: ${details.length}`
     ].join('\n');
 
+  } else if (agent === 'authority-document-citation' || agent === 'lrr-obligation-mapping' || agent === 'regulatory-decomposition') {
+    const details = data.result?.details || {};
+    agnosticTranslation = {
+      agentType: 'AuthorityDocumentCitationAgent (FEM-RD-01 to FEM-RD-10)',
+      authorityDocumentId: targetId,
+      authorityName: details.authorityName || targetId,
+      scenario: details.scenario || 'manual_maintenance',
+      isFirstPassGreenfield: details.isFirstPassGreenfield || false,
+      decomposedCount: details.decomposedCount || 0,
+      nonDutyCount: details.nonDutyCount || 0,
+      existingMapped: details.existingMapped || 0,
+      newCreated: details.newCreated || 0,
+      deltaSummary: details.deltaSummary || { added: 0, amended: 0, withdrawn: 0, unchanged: 0 },
+      decomposedObligations: details.decomposedObligations || [],
+      classifiedNonDuties: details.classifiedNonDuties || [],
+      staleObligations: details.staleObligations || [],
+      feedDivergences: details.feedDivergences || []
+    };
+    simulatedPrompt = [
+      '[WissdaSense — Regulatory Decomposition Prompt (FEM-RD-01 to FEM-RD-10)]',
+      `Authority Document: ${details.authorityName || targetId}`,
+      `Scenario: ${(details.scenario || 'manual_maintenance').replace(/_/g, ' ').toUpperCase()}`,
+      'RD-01: Accept source in any form (DB record, raw text, structured feed)',
+      'RD-02: Decompose to single-duty obligations (1 enforceable duty per record)',
+      'RD-03: Preserve source hierarchy (Part > Section > Subsection > Paragraph)',
+      'RD-04: Classify non-obligation text (definitions, recitals, scope statements)',
+      'RD-05: Duplicate detection against existing library',
+      'RD-06: Delta on change (added, amended, withdrawn, unchanged)',
+      'RD-07: Applicability proposal (in_scope / out_of_scope) for reviewer',
+      `Single-Duty Obligations Decomposed: ${details.decomposedCount || 0}`,
+      `Non-Obligation Items Classified: ${details.nonDutyCount || 0}`,
+      `Existing Library Records Linked: ${details.existingMapped || 0}`,
+      `New Obligations Proposed: ${details.newCreated || 0}`
+    ].join('\n');
+
+  } else if (agent === 'citation-risk-mapping') {
+    const details = data.result?.details || {};
+    agnosticTranslation = {
+      agentType: 'CitationRiskMappingAgent',
+      citationSysId: targetId,
+      citationName: details.citationName,
+      entitiesEvaluated: details.entitiesEvaluated || 0,
+      existingRisksMapped: details.existingRisksMapped || 0,
+      draftRisksCreated: details.draftRisksCreated || 0,
+      noMatchEntities: details.noMatchEntities || 0,
+      overMappedRisks: details.overMappedRisks || [],
+      rankedCandidates: details.rankedCandidates || [],
+      draftRisks: details.draftRisks || [],
+      coverageSummary: details.coverageSummary || ''
+    };
+    simulatedPrompt = [
+      '[WissdaSense — Citation to Risk Mapping Prompt (FEM-OC-01 to FEM-OC-06)]',
+      `Citation ID: ${targetId}`,
+      `Citation Name: ${details.citationName || targetId}`,
+      `Entities Evaluated: ${details.entitiesEvaluated || 0}`,
+      'OC-01: Ranked candidate risks per entity with confidence scores',
+      'OC-02: Explicit no-match for gap entities',
+      'OC-03: Propose draft risks for uncovered entities',
+      'OC-04: Coverage report summary',
+      'OC-05: Over-mapping detection (threshold: 4+ obligations)',
+      'OC-06: Join layer mapping via u_citations'
+    ].join('\n');
+
   } else {
     // risk-control-mapping
     const liveResult = data.result?.details || data.result || {};
@@ -944,6 +1130,138 @@ async function runLiveAgent(platform, agent, targetId) {
         writebackLines.push(`  ├─ Factor: ${d.factor} → Rating: ${d.rating || d.error} (Score: ${d.score ?? 'N/A'})`);
       }
     });
+  } else if (agent === 'authority-document-citation' || agent === 'lrr-obligation-mapping' || agent === 'regulatory-decomposition') {
+    const details = data.result?.details || {};
+    const decomposed = details.decomposedObligations || [];
+    const nonDuties = details.classifiedNonDuties || [];
+    const delta = details.deltaSummary || { added: 0, amended: 0, withdrawn: 0, unchanged: 0 };
+    const stale = details.staleObligations || [];
+    const divergences = details.feedDivergences || [];
+
+    writebackLines.push('');
+    writebackLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    writebackLines.push(`  REGULATORY DECOMPOSITION AUDIT LOG (FEM-RD-01 to RD-10)`);
+    writebackLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    writebackLines.push(`  Authority Document  : ${details.authorityName || targetId}`);
+    writebackLines.push(`  Scenario            : ${(details.scenario || 'manual_maintenance').replace(/_/g, ' ').toUpperCase()}`);
+    writebackLines.push(`  Single-Duty Duties  : ${decomposed.length}`);
+    writebackLines.push(`  Non-Duty Classified : ${nonDuties.length}`);
+    writebackLines.push(`  Linked Existing     : ${details.existingMapped || 0}`);
+    writebackLines.push(`  Proposed New        : ${details.newCreated || 0}`);
+    writebackLines.push('');
+
+    if (details.isFirstPassGreenfield) {
+      writebackLines.push(`⚠️  FIRST PASS GREENFIELD BUILD (FEM-RD-10)`);
+      writebackLines.push(`    Initial taxonomy constructed. Requires structural reviewer validation.`);
+      writebackLines.push('');
+    }
+
+    writebackLines.push(`VERSION DELTA (FEM-RD-06): Added: ${delta.added} | Amended: ${delta.amended} | Withdrawn: ${delta.withdrawn} | Unchanged: ${delta.unchanged}`);
+    writebackLines.push('');
+
+    if (decomposed.length > 0) {
+      writebackLines.push(`DECOMPOSED SINGLE-DUTY OBLIGATIONS (FEM-RD-02, RD-03, RD-05, RD-07)`);
+      writebackLines.push(`──────────────────────────────────────────────────`);
+      decomposed.forEach((o, i) => {
+        const appTag = o.applicability_proposal === 'in_scope' ? '✅ IN SCOPE' : '⛔ OUT OF SCOPE';
+        const dupTag = o.duplicate_status === 'exact_duplicate' ? ' [LINKED EXISTING]' : o.duplicate_status === 'near_duplicate' ? ' [NEAR-DUPLICATE]' : '';
+        writebackLines.push(`  [${i + 1}] ${o.proposed_name}${dupTag}`);
+        writebackLines.push(`      Hierarchy    : ${o.citation_reference}`);
+        writebackLines.push(`      Atomic Duty  : ${o.duty}`);
+        writebackLines.push(`      Applicability: ${appTag} — ${o.applicability_rationale}`);
+        if (o.change_type && o.change_type !== 'added') {
+          writebackLines.push(`      Change Type  : ${o.change_type.toUpperCase()}${o.change_rationale ? ' — ' + o.change_rationale : ''}`);
+        }
+        writebackLines.push('');
+      });
+    }
+
+    if (nonDuties.length > 0) {
+      writebackLines.push(`CLASSIFIED NON-OBLIGATION CONTENT (FEM-RD-04)`);
+      writebackLines.push(`──────────────────────────────────────────────────`);
+      nonDuties.forEach((n, i) => {
+        writebackLines.push(`  [${i + 1}] [${n.category.toUpperCase()}] ${n.section_reference}`);
+        writebackLines.push(`      Text     : "${n.text_snippet.substring(0, 120)}"`);
+        writebackLines.push(`      Excluded : ${n.exclusion_reason}`);
+        writebackLines.push('');
+      });
+    }
+
+    if (divergences.length > 0) {
+      writebackLines.push(`⚠️ FEED RECONCILIATION DIVERGENCES (FEM-RD-08)`);
+      writebackLines.push(`──────────────────────────────────────────────────`);
+      divergences.forEach(f => {
+        writebackLines.push(`  • ${f.feed_obligation}: ${f.issue} → Correction: ${f.proposed_correction}`);
+      });
+      writebackLines.push('');
+    }
+
+    if (stale.length > 0) {
+      writebackLines.push(`⚠️ STALE OBLIGATIONS DETECTED (FEM-RD-09)`);
+      writebackLines.push(`──────────────────────────────────────────────────`);
+      stale.forEach(s => {
+        writebackLines.push(`  • ${s.obligation_name}: ${s.reason}`);
+      });
+      writebackLines.push('');
+    }
+
+    if (details.coverageSummary) {
+      writebackLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+      writebackLines.push(`  TAXONOMY & HIERARCHY COVERAGE`);
+      writebackLines.push(`  ${details.coverageSummary}`);
+      writebackLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    }
+  } else if (agent === 'citation-risk-mapping') {
+    const details = data.result?.details || {};
+    writebackLines.push('');
+    writebackLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    writebackLines.push(`  CITATION TO RISK MAPPING AUDIT LOG (FEM-OC-01 to OC-06)`);
+    writebackLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    writebackLines.push(`  Citation/Obligation : ${details.citationName || targetId}`);
+    writebackLines.push(`  Entities Evaluated  : ${details.entitiesEvaluated || 0}`);
+    writebackLines.push(`  ✅ Existing Mapped  : ${details.existingRisksMapped || 0}`);
+    writebackLines.push(`  ✨ Drafts Created   : ${details.draftRisksCreated || 0}`);
+    writebackLines.push(`  ❌ No-Match Gaps    : ${details.noMatchEntities || 0}`);
+    writebackLines.push('');
+
+    if (details.rankedCandidates && details.rankedCandidates.length > 0) {
+      writebackLines.push(`RANKED CANDIDATE EVALUATION (FEM-OC-01 & OC-02)`);
+      writebackLines.push(`──────────────────────────────────────────────────`);
+      details.rankedCandidates.forEach((c, i) => {
+        const statusTag = c.action === 'linked' ? '✅ LINKED' : '❌ NO MATCH';
+        writebackLines.push(`  [${i + 1}] ${statusTag} ${c.risk_name} (${c.entity_name})`);
+        writebackLines.push(`      Confidence : ${(c.confidence_score * 100).toFixed(0)}%`);
+        writebackLines.push(`      Rationale  : ${c.rationale}`);
+        writebackLines.push('');
+      });
+    }
+
+    if (details.draftRisks && details.draftRisks.length > 0) {
+      writebackLines.push(`DRAFT RISKS CREATED ON GAPS (FEM-OC-03)`);
+      writebackLines.push(`──────────────────────────────────────────────────`);
+      details.draftRisks.forEach((d, i) => {
+        writebackLines.push(`  [${i + 1}] 📝 ${d.proposed_risk_name} → ${d.entity_name}`);
+        writebackLines.push(`      Gap Reason : ${d.gap_rationale}`);
+        writebackLines.push(`      Description: ${d.proposed_description}`);
+        writebackLines.push('');
+      });
+    }
+
+    if (details.overMappedRisks && details.overMappedRisks.length > 0) {
+      writebackLines.push(`⚠️ OVER-MAPPING WARNINGS (FEM-OC-05)`);
+      writebackLines.push(`──────────────────────────────────────────────────`);
+      details.overMappedRisks.forEach(o => {
+        writebackLines.push(`  • ${o.riskName} has ${o.citationCount} obligation links (exceeds threshold)`);
+      });
+      writebackLines.push('');
+    }
+
+    if (details.coverageSummary) {
+      writebackLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+      writebackLines.push(`  COVERAGE REPORT (FEM-OC-04)`);
+      writebackLines.push(`  ${details.coverageSummary}`);
+      writebackLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    }
   } else {
     // risk-control-mapping — rich checklist log
     const d = data.result?.details || {};
@@ -1044,6 +1362,21 @@ async function runLocalAgentSimulation(platform, agent, targetId) {
           rubrics: 'Verify data scope, access configuration, and exposure indices.'
         }))
     };
+  } else if (agent === 'authority-document-citation' || agent === 'lrr-obligation-mapping') {
+    agnosticTranslation = {
+      authorityDocId: targetId,
+      name: sourceRecord.name,
+      description: sourceRecord.description,
+      type: sourceRecord.type || 'Regulation'
+    };
+  } else if (agent === 'citation-risk-mapping') {
+    agnosticTranslation = {
+      citationSysId: targetId,
+      name: sourceRecord.name,
+      reference: sourceRecord.reference || 'Section N/A',
+      description: sourceRecord.description,
+      document: sourceRecord.document || 'auth_doc_001'
+    };
   } else {
     agnosticTranslation = {
       riskId: sourceRecord.sys_id || sourceRecord.Id,
@@ -1076,6 +1409,26 @@ async function runLocalAgentSimulation(platform, agent, targetId) {
       `Factors to evaluate: ${JSON.stringify(agnosticTranslation.manualFactors)}`,
       'Determine inherent score bands based on industry guides.'
     ].join('\n');
+  } else if (agent === 'authority-document-citation' || agent === 'lrr-obligation-mapping') {
+    mockPrompt = [
+      'You are WissdaSense GRC LRR Obligations Agent.',
+      `Authority Document: ${targetId}`,
+      'Query all obligations from sn_compliance_citation table.',
+      'Match using semantic analysis of document requirements.',
+      'For matched obligations: map or recommend with priority analysis.',
+      'Create new obligations for unmatched requirements.'
+    ].join('\n');
+  } else if (agent === 'citation-risk-mapping') {
+    mockPrompt = [
+      'You are WissdaSense GRC Citation-to-Risk Mapping Agent (FEM-OC-01 to OC-06).',
+      `Obligation/Citation: ${agnosticTranslation.name} (${agnosticTranslation.reference})`,
+      '1. OC-01: Rank existing risks across all entities with confidence scores.',
+      '2. OC-02: Explicit no-match for gap entities.',
+      '3. OC-03: Propose draft risks for uncovered entity/process gaps.',
+      '4. OC-04: Generate standing coverage summary.',
+      '5. OC-05: Flag risks with 4+ existing obligation links (over-mapping warning).',
+      '6. OC-06: Map at the join layer via u_citations.'
+    ].join('\n');
   } else {
     mockPrompt = [
       'You are GRC Risk-Control Mapping Agent.',
@@ -1107,6 +1460,30 @@ async function runLocalAgentSimulation(platform, agent, targetId) {
         '[ServiceNow DB UPDATE] Table [sn_risk_advanced_risk_assessment_instance_response] Factor [External Threat Exposure] -> score: 2 (Medium)',
         '  └─ Comments: Informed by open issue ISS001 (MFA Bypassed on backup servers).'
       ];
+    } else if (agent === 'authority-document-citation' || agent === 'lrr-obligation-mapping') {
+      logs = [
+        '[ServiceNow DB UPDATE] Querying sn_compliance_citation for obligations...',
+        '[ServiceNow DB UPDATE] Matched 3 obligations using semantic analysis:',
+        '  ├─ [MAPPED] Customer Data Protection Obligation → sn_compliance_m2m_citation',
+        '  ├─ [RECOMMENDED] Data Breach Notification → Also linked to GDPR, recommend higher priority',
+        '  └─ [CREATED] Banking Regulation Specific Requirement → New citation created',
+        '[ServiceNow DB UPDATE] Authority Document row auth_001 → u_citation_status: [3 mapped obligations]'
+      ];
+    } else if (agent === 'citation-risk-mapping') {
+      logs = [
+        '[ServiceNow DB UPDATE] Querying sn_grc_profile (4 entities) and sn_risk_risk (2 existing risks)...',
+        '[ServiceNow DB UPDATE] Evaluated ranked candidate risks per entity (FEM-OC-01):',
+        '  ├─ ✅ LINKED: Unauthorized DB Access (Core DB Cluster) — Confidence: 95%',
+        '  │    Rationale: Citation requires DB encryption; breaches directly on unauthorized access.',
+        '  ├─ ❌ NO MATCH: Phishing Hack Outage (Corporate IT) — Confidence: 15%',
+        '  │    Rationale: Phishing endpoint risk does not cover backend database encryption mandate.',
+        '[ServiceNow DB UPDATE] Table [sn_risk_risk] row risk_001 -> u_citations: [obl_001,obl_003] (FEM-OC-06)',
+        '[ServiceNow DB UPDATE] Created DRAFT risks for gap entities (FEM-OC-03):',
+        '  ├─ 📝 [DRAFT] Customer PII Leak via Support Portal → Customer Support Operations',
+        '  │    Gap: Support ticketing system lacks dedicated risk for PII in ticket attachments.',
+        '  └─ 📝 [DRAFT] Financial Record Exfiltration → Financial Operations & Billing',
+        '[ServiceNow DB UPDATE] Table [sn_compliance_citation] row ' + targetId + ' -> u_ai_recommendation: [HTML summary written]'
+      ];
     } else {
       logs = [
         '[ServiceNow DB UPDATE] Querying sn_compliance_control for entity "Core DB Cluster"...',
@@ -1129,6 +1506,21 @@ async function runLocalAgentSimulation(platform, agent, targetId) {
       logs = [
         '[Salesforce DB UPDATE] Row sf_factor_item_03 (Financial Impact Level) -> Score__c: 2 (Medium)',
         '  └─ Comments: Financial scope is internal; estimated damage is $250k.'
+      ];
+    } else if (agent === 'authority-document-citation' || agent === 'lrr-obligation-mapping') {
+      logs = [
+        '[Salesforce DB UPDATE] Querying Compliance_Obligation__c records for semantic matching...',
+        '[Salesforce DB UPDATE] Created 3 rows in Authority_Citation_Mapping__c:',
+        '  ├─ Customer_Data_Protection__c (sf_obl_501) - Mapped to sf_auth_doc_901',
+        '  ├─ Data_Breach_Notification__c (sf_obl_502) - Recommended (priority: Higher in Basel III context)',
+        '  └─ Transaction_Monitoring__c (sf_obl_503) - New obligation created',
+        '[Salesforce DB UPDATE] Authority Document sf_auth_doc_901 → Citation_Status__c: [3 mapped obligations]'
+      ];
+    } else if (agent === 'citation-risk-mapping') {
+      logs = [
+        '[Salesforce DB UPDATE] Querying Account and Risk__c records...',
+        '[Salesforce DB UPDATE] Mapped sf_obl_501 to sf_risk_901 (Data Leak via S3 Buckets) on Account Cloud Ops & Billing.',
+        '[Salesforce DB UPDATE] Created draft risk for gap account in custom GRC schema.'
       ];
     } else {
       logs = [

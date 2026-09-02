@@ -34,7 +34,9 @@ import {
   ControlEffectivenessAgent,
   InherentAssessmentAgent,
   RiskControlMappingAgent,
-  IssueIdentificationAgent
+  IssueIdentificationAgent,
+  AuthorityDocumentCitationAgent,
+  CitationRiskMappingAgent
 } from './core/agents';
 import { withTrace, currentTrace, recentTraces, computeStats } from './core/observability';
 import { runIntegrityScan } from './core/integrity_scan';
@@ -251,7 +253,9 @@ app.get('/api/platforms', (req, res) => {
       { id: 'control-effectiveness', name: 'Control Effectiveness Agent', description: 'Batch assesses control effectiveness against test evidence and audit runs.' },
       { id: 'inherent-assessment', name: 'Inherent Assessment Agent', description: 'Evaluates inherent factors (PII sensitivity, threat model) using guidance rubrics.' },
       { id: 'risk-control-mapping', name: 'Risk-Control Mapping Agent', description: 'Analyses entity risks and maps relevant mitigating controls from library.' },
-      { id: 'issue-identification', name: 'Issue Identification Agent', description: 'Drafts a tracked issue for a risk, given its sys_id — trigger is external (e.g. a ServiceNow client script), not scan-based.' }
+      { id: 'issue-identification', name: 'Issue Identification Agent', description: 'Drafts a tracked issue for a risk, given its sys_id — trigger is external (e.g. a ServiceNow client script), not scan-based.' },
+      { id: 'authority-document-citation', name: 'LRR Obligation Mapping Agent', description: 'Maps authority documents to obligations with semantic matching and priority analysis.' },
+      { id: 'citation-risk-mapping', name: 'Citation to Risk Mapping Agent', description: 'Maps citations/obligations to breachable entity risks with ranked candidate evaluation, gap identification, and over-mapping detection.' }
     ]
   });
 });
@@ -312,7 +316,7 @@ app.post('/api/run-agent', async (req, res) => {
     originalLog(...args);
   };
 
-  if (!['control-effectiveness', 'inherent-assessment', 'risk-control-mapping', 'issue-identification'].includes(agent)) {
+  if (!['control-effectiveness', 'inherent-assessment', 'risk-control-mapping', 'issue-identification', 'authority-document-citation', 'lrr-obligation-mapping', 'regulatory-decomposition', 'citation-risk-mapping'].includes(agent)) {
     console.log = originalLog;
     return res.status(400).json({
       error: `Unsupported agent action: ${agent}`,
@@ -341,6 +345,10 @@ app.post('/api/run-agent', async (req, res) => {
           agentResult = await new InherentAssessmentAgent(adapter, llmClient).execute(targetId);
         } else if (agent === 'issue-identification') {
           agentResult = await new IssueIdentificationAgent(adapter, llmClient).execute(targetId);
+        } else if (agent === 'authority-document-citation' || agent === 'lrr-obligation-mapping' || agent === 'regulatory-decomposition') {
+          agentResult = await new AuthorityDocumentCitationAgent(adapter, llmClient).execute(targetId, req.body.options || req.body);
+        } else if (agent === 'citation-risk-mapping') {
+          agentResult = await new CitationRiskMappingAgent(adapter, llmClient).execute(targetId);
         } else {
           agentResult = await new RiskControlMappingAgent(adapter, llmClient).execute(targetId);
         }
@@ -595,6 +603,59 @@ app.get('/api/platforms/servicenow/assessments', async (req, res) => {
   }
 });
 
+// Endpoint to list all authority documents from ServiceNow (for LRR Obligations Agent)
+app.get('/api/platforms/servicenow/authority-documents', async (req, res) => {
+  const instanceId = req.instanceId; // ✅ From isolation middleware
+
+  try {
+    // ✅ ISOLATION: Use registry-managed adapter for THIS instance
+    const adapter = instanceRegistry.getAdapter(instanceId);
+    const documents = await adapter.getAllAuthorityDocuments();
+    const adapterDiagnostics = adapter.getAdapterDiagnostics();
+
+    res.json({
+      success: true,
+      instanceId, // ✅ Proof of isolation
+      adapterDiagnostics, // ✅ Show live vs mock mode
+      useLive: adapterDiagnostics.useLive,
+      documents
+    });
+  } catch (error: any) {
+    console.error(`[ISOLATION] Instance '${instanceId}' authority documents fetch failed: ${error.message}`);
+    res.status(500).json({
+      success: false,
+      error: `[ISOLATION] Failed to fetch authority documents for instance '${instanceId}'`,
+      instanceId
+    });
+  }
+});
+
+// Endpoint to list all citations / obligations from ServiceNow (for Citation to Risk Mapping Agent)
+app.get(['/api/platforms/servicenow/citations', '/api/platforms/servicenow/obligations'], async (req, res) => {
+  const instanceId = req.instanceId; // ✅ From isolation middleware
+
+  try {
+    const adapter = instanceRegistry.getAdapter(instanceId);
+    const citations = await (adapter as any).getAllObligations?.() || [];
+    const adapterDiagnostics = adapter.getAdapterDiagnostics();
+
+    res.json({
+      success: true,
+      instanceId,
+      adapterDiagnostics,
+      useLive: adapterDiagnostics.useLive,
+      citations
+    });
+  } catch (error: any) {
+    console.error(`[ISOLATION] Instance '${instanceId}' citations fetch failed: ${error.message}`);
+    res.status(500).json({
+      success: false,
+      error: `[ISOLATION] Failed to fetch citations for instance '${instanceId}'`,
+      instanceId
+    });
+  }
+});
+
 // Endpoint to list all available risks from Salesforce (live or mock)
 app.get('/api/platforms/salesforce/risks', async (req, res) => {
   try {
@@ -611,6 +672,26 @@ app.get('/api/platforms/salesforce/assessments', async (req, res) => {
     const agent = req.query.agent as string;
     const instances = await salesforceAdapter.getAllAssessmentInstances(agent);
     res.json({ success: true, instances });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Endpoint to list all authority documents from Salesforce (live or mock)
+app.get('/api/platforms/salesforce/authority-documents', async (req, res) => {
+  try {
+    const documents = await (salesforceAdapter as any).getAllAuthorityDocuments?.() || [];
+    res.json({ success: true, documents });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Endpoint to list all citations from Salesforce (live or mock)
+app.get('/api/platforms/salesforce/citations', async (req, res) => {
+  try {
+    const citations = await (salesforceAdapter as any).getAllObligations?.() || [];
+    res.json({ success: true, citations });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -736,6 +817,28 @@ app.get('/api/platforms/:platformName/assessments', async (req, res) => {
   }
 });
 
+app.get('/api/platforms/:platformName/authority-documents', async (req, res) => {
+  const adapter = dynamicAdapters.get(req.params.platformName);
+  if (!adapter) return res.status(404).json({ success: false, error: `No discovered platform named '${req.params.platformName}'.` });
+  try {
+    const documents = await (adapter as any).getAllAuthorityDocuments?.() || [];
+    res.json({ success: true, documents });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/platforms/:platformName/citations', async (req, res) => {
+  const adapter = dynamicAdapters.get(req.params.platformName);
+  if (!adapter) return res.status(404).json({ success: false, error: `No discovered platform named '${req.params.platformName}'.` });
+  try {
+    const citations = await (adapter as any).getAllObligations?.() || [];
+    res.json({ success: true, citations });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 
 // Export for Vercel (and other serverless runtimes) which import the app
 // directly without calling listen(). Local Express dev still calls listen().
@@ -807,8 +910,13 @@ app.use((req, res, next) => {
     '/api/health/integrity-scan': ['GET'],
     '/api/platforms/servicenow/risks': ['GET'],
     '/api/platforms/servicenow/assessments': ['GET'],
+    '/api/platforms/servicenow/authority-documents': ['GET'],
+    '/api/platforms/servicenow/citations': ['GET'],
+    '/api/platforms/servicenow/obligations': ['GET'],
     '/api/platforms/salesforce/risks': ['GET'],
     '/api/platforms/salesforce/assessments': ['GET'],
+    '/api/platforms/salesforce/authority-documents': ['GET'],
+    '/api/platforms/salesforce/citations': ['GET'],
     '/api/schema-discovery': ['POST'],
     '/api/schema-discovery/live': ['POST'],
     '/api/schema-discovery/candidates': ['GET'],
@@ -817,6 +925,9 @@ app.use((req, res, next) => {
   const parameterPatterns: { pattern: RegExp; methods: string[] }[] = [
     { pattern: /^\/api\/platforms\/[^\/]+\/risks$/, methods: ['GET'] },
     { pattern: /^\/api\/platforms\/[^\/]+\/assessments$/, methods: ['GET'] },
+    { pattern: /^\/api\/platforms\/[^\/]+\/authority-documents$/, methods: ['GET'] },
+    { pattern: /^\/api\/platforms\/[^\/]+\/citations$/, methods: ['GET'] },
+    { pattern: /^\/api\/platforms\/[^\/]+\/obligations$/, methods: ['GET'] },
     { pattern: /^\/api\/debug\/salesforce\/describe\/[^\/]+$/, methods: ['GET'] }
   ];
 

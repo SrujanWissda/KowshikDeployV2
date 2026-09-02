@@ -23,9 +23,24 @@ function getDisplayValue(field: any): string {
 // Mock ServiceNow GlideRecord Database (Simulation Fallback)
 // ============================================================================
 
-const sn_risk_risk = [
-  { sys_id: 'risk_001', name: 'Unauthorized DB Access', description: 'Risk of malicious actors gaining direct access to customer DB records.', profile: 'profile_db_server', profile_name: 'Core DB Cluster' },
-  { sys_id: 'risk_002', name: 'Phishing Hack Outage', description: 'Employees click phishing links leading to ransomware deployment and service outage.', profile: 'profile_corp_it', profile_name: 'Corporate IT Infrastructure' }
+const sn_grc_profile = [
+  { sys_id: 'profile_db_server', name: 'Core DB Cluster', type: 'Database / IT Infrastructure', description: 'Primary relational and NoSQL database clusters storing customer accounts, financial records, and credentials.' },
+  { sys_id: 'profile_corp_it', name: 'Corporate IT Infrastructure', type: 'Internal IT / Endpoints', description: 'Workstations, email gateways, identity providers, and corporate network perimeter.' },
+  { sys_id: 'profile_fin_ops', name: 'Financial Operations & Billing', type: 'Business Process', description: 'Payment processing, invoice reconciliation, and general ledger operations.' },
+  { sys_id: 'profile_cust_support', name: 'Customer Support Operations', type: 'Business Process', description: 'Omnichannel customer support ticketing, call center recording, and customer PII handling.' }
+];
+
+const sn_risk_risk: Array<{
+  sys_id: string;
+  name: string;
+  description: string;
+  profile: string;
+  profile_name: string;
+  u_citations?: string;
+  u_ai_recommendation?: string;
+}> = [
+  { sys_id: 'risk_001', name: 'Unauthorized DB Access', description: 'Risk of malicious actors gaining direct access to customer DB records.', profile: 'profile_db_server', profile_name: 'Core DB Cluster', u_citations: 'obl_001,obl_003' },
+  { sys_id: 'risk_002', name: 'Phishing Hack Outage', description: 'Employees click phishing links leading to ransomware deployment and service outage.', profile: 'profile_corp_it', profile_name: 'Corporate IT Infrastructure', u_citations: 'obl_002' }
 ];
 
 const sn_compliance_control = [
@@ -95,6 +110,20 @@ const sn_grc_issue = [
 ];
 
 const sn_risk_m2m_risk_control: Array<{ sn_risk_risk: string, sn_compliance_control: string }> = [];
+
+const sn_compliance_authority_document = [
+  { sys_id: 'auth_doc_001', name: 'Basel III Framework', number: 'AD001', type: 'Regulation', description: 'Basel III regulatory framework for banking supervision and capital adequacy.', category: 'Banking' },
+  { sys_id: 'auth_doc_002', name: 'GDPR Compliance', number: 'AD002', type: 'Regulation', description: 'General Data Protection Regulation standards for personal data privacy and governance.', category: 'Privacy' },
+  { sys_id: 'auth_doc_003', name: 'SOX Section 404', number: 'AD003', type: 'Statute', description: 'Sarbanes-Oxley Act Management Assessment of Internal Controls and financial reporting integrity.', category: 'Financial' }
+];
+
+const sn_compliance_citation = [
+  { sys_id: 'obl_001', name: 'Customer Data Protection Obligation', description: 'Ensure customer PII and sensitive financial data are encrypted at rest and in transit across all databases and communication pipelines.', reference: 'Section 4.1', document: 'auth_doc_002', sys_created_on: '2026-01-10' },
+  { sys_id: 'obl_002', name: 'Data Breach Notification Obligation', description: 'Notify supervisory authorities and affected customers within 72 hours of becoming aware of a personal data breach or reporting failure.', reference: 'Article 33', document: 'auth_doc_002', sys_created_on: '2026-02-15' },
+  { sys_id: 'obl_003', name: 'Internal Control Audit Trail Obligation', description: 'Maintain immutable audit trails for financial transaction records, user privilege escalations, and system configuration changes.', reference: 'Section 404(a)', document: 'auth_doc_003', sys_created_on: '2026-03-01' },
+  { sys_id: 'obl_004', name: 'Privileged Access & Segregation of Duties Obligation', description: 'Enforce strict role-based access control (RBAC), multi-factor authentication, and separation of duties for all production administration.', reference: 'Basel Section 5.3', document: 'auth_doc_001', sys_created_on: '2026-03-12' },
+  { sys_id: 'obl_005', name: 'Third-Party Vendor Risk & SLA Governance', description: 'Conduct mandatory security assessments and continuous compliance monitoring for all external contractors, sub-processors, and cloud service providers.', reference: 'Section 9.4', document: 'auth_doc_001', sys_created_on: '2026-03-20' }
+];
 
 // ============================================================================
 // ServiceNow Adapter Implementation
@@ -399,7 +428,6 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
         }
 
         const results = await this.queryTable<any>('sn_risk_advanced_risk_assessment_instance', {
-          sysparm_limit: '200',
           sysparm_fields: 'sys_id,risk,state,sys_created_on',
           sysparm_query: query
         });
@@ -445,12 +473,10 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
   }
 
   async getAllRisks(): Promise<Risk[]> {
-
     if (this.useLive) {
       try {
         const results = await this.queryTable<any>('sn_risk_risk', {
-          sysparm_limit: '50',
-          sysparm_fields: 'sys_id,name,short_description,description,profile,sys_created_on',
+          sysparm_fields: 'sys_id,name,short_description,description,profile,u_citations,sys_created_on',
           sysparm_query: 'ORDERBYDESCsys_created_on'
         });
         return results.map((record: any) => ({
@@ -458,7 +484,9 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
           name: getDisplayValue(record.name) || getDisplayValue(record.short_description) || 'Unnamed Risk',
           description: getDisplayValue(record.description),
           profileSysId: getValue(record.profile),
-          profileName: getDisplayValue(record.profile) || 'Unknown Entity'
+          profileName: getDisplayValue(record.profile) || 'Unknown Entity',
+          citations: getValue(record.u_citations) || getValue(record.citations),
+          u_citations: getValue(record.u_citations) || getValue(record.citations)
         }));
       } catch (e: any) {
         console.warn(`[ServiceNowAdapter] Live getAllRisks failed, using mock fallback. Error: ${e.message}`);
@@ -471,7 +499,9 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       name: r.name,
       description: r.description,
       profileSysId: r.profile,
-      profileName: r.profile_name
+      profileName: r.profile_name,
+      citations: r.u_citations || '',
+      u_citations: r.u_citations || ''
     }));
   }
 
@@ -480,7 +510,7 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       try {
         const results = await this.queryTable<any>('sn_risk_risk', { 
           sysparm_query: `sys_id=${riskSysId}`,
-          sysparm_fields: 'sys_id,name,short_description,description,profile'
+          sysparm_fields: 'sys_id,name,short_description,description,profile,u_citations'
         });
         if (results.length > 0) {
           const record = results[0];
@@ -489,7 +519,9 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
             name: getDisplayValue(record.name) || getDisplayValue(record.short_description),
             description: getDisplayValue(record.description),
             profileSysId: getValue(record.profile),
-            profileName: getDisplayValue(record.profile) || 'Unknown entity'
+            profileName: getDisplayValue(record.profile) || 'Unknown entity',
+            citations: getValue(record.u_citations) || getValue(record.citations),
+            u_citations: getValue(record.u_citations) || getValue(record.citations)
           };
         }
         return null;
@@ -505,7 +537,9 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       name: record.name,
       description: record.description,
       profileSysId: record.profile,
-      profileName: record.profile_name
+      profileName: record.profile_name,
+      citations: record.u_citations || '',
+      u_citations: record.u_citations || ''
     };
   }
 
@@ -2069,5 +2103,522 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
     } catch {
       return [];
     }
+  }
+
+  // ── Authority Document Citation Agent Methods ─────────────────────────
+
+  async getAuthorityDocument(sysId: string): Promise<any> {
+    console.log(`[AuthorityDoc] Fetching: ${sysId}, useLive=${this.useLive}`);
+    if (this.useLive) {
+      const candidateTables = ['sn_compliance_authority_document', 'sn_compliance_document', 'sn_grc_document'];
+      for (const table of candidateTables) {
+        try {
+          const results = await this.queryTable<any>(table, {
+            sysparm_query: `sys_id=${sysId}`,
+            sysparm_fields: 'sys_id,name,short_description,description,type,number,category'
+          });
+          if (results && results.length > 0) {
+            const record = results[0];
+            return {
+              sys_id: getValue(record.sys_id),
+              sysId: getValue(record.sys_id),
+              name: getDisplayValue(record.name) || getDisplayValue(record.short_description) || getDisplayValue(record.number) || 'Unnamed Document',
+              number: getDisplayValue(record.number),
+              type: getDisplayValue(record.type),
+              description: getDisplayValue(record.description) || getDisplayValue(record.short_description),
+              category: getDisplayValue(record.category)
+            };
+          }
+        } catch (error: any) {
+          console.warn(`[AuthorityDoc] Query ${table} failed: ${error.message}`);
+        }
+      }
+    }
+
+    // Mock fallback
+    const mock = sn_compliance_authority_document.find(d => d.sys_id === sysId);
+    if (mock) {
+      return {
+        sys_id: mock.sys_id,
+        sysId: mock.sys_id,
+        name: mock.name,
+        number: mock.number,
+        type: mock.type,
+        description: mock.description,
+        category: mock.category
+      };
+    }
+    return null;
+  }
+
+  async getAllAuthorityDocuments(): Promise<any[]> {
+    if (this.useLive) {
+      const candidateTables = ['sn_compliance_authority_document', 'sn_compliance_document', 'sn_grc_document'];
+      for (const table of candidateTables) {
+        try {
+          const results = await this.queryTable<any>(table, {
+            sysparm_fields: 'sys_id,name,short_description,description,type,number,category,sys_created_on',
+            sysparm_query: 'ORDERBYDESCsys_created_on'
+          });
+          if (results && results.length > 0) {
+            console.log(`[ServiceNowAdapter] Found ${results.length} live authority documents in ${table}`);
+            return results.map((record: any) => ({
+              sys_id: getValue(record.sys_id),
+              sysId: getValue(record.sys_id),
+              name: getDisplayValue(record.name) || getDisplayValue(record.short_description) || getDisplayValue(record.number) || 'Unnamed Document',
+              number: getDisplayValue(record.number),
+              type: getDisplayValue(record.type),
+              description: getDisplayValue(record.description) || getDisplayValue(record.short_description),
+              category: getDisplayValue(record.category)
+            }));
+          }
+        } catch (e: any) {
+          console.warn(`[ServiceNowAdapter] Live getAllAuthorityDocuments failed on ${table}: ${e.message}`);
+        }
+      }
+    }
+
+    // Fallback: return mock authority documents
+    return sn_compliance_authority_document.map(d => ({
+      sys_id: d.sys_id,
+      sysId: d.sys_id,
+      name: d.name,
+      number: d.number,
+      type: d.type,
+      description: d.description,
+      category: d.category
+    }));
+  }
+
+  async getAllObligations(): Promise<any[]> {
+    if (this.useLive) {
+      const candidateTables = ['sn_compliance_citation', 'sn_compliance_policy_statement', 'sn_compliance_requirement'];
+      for (const table of candidateTables) {
+        try {
+          const results = await this.queryTable<any>(table, {
+            sysparm_fields: 'sys_id,name,short_description,description,reference,document,sys_created_on',
+            sysparm_query: 'ORDERBYDESCsys_created_on'
+          });
+          if (results && results.length > 0) {
+            console.log(`[ServiceNowAdapter] Found ${results.length} live obligations in ${table}`);
+            return results.map((record: any) => ({
+              sys_id: getValue(record.sys_id),
+              name: getDisplayValue(record.name) || getDisplayValue(record.short_description) || 'Unnamed Obligation',
+              description: getDisplayValue(record.description) || getDisplayValue(record.short_description),
+              reference: getDisplayValue(record.reference),
+              document: getValue(record.document),
+              document_name: getDisplayValue(record.document)
+            }));
+          }
+        } catch (e: any) {
+          console.warn(`[ServiceNowAdapter] Querying obligations from ${table} failed: ${e.message}`);
+        }
+      }
+    }
+
+    // Mock fallback
+    return sn_compliance_citation.map(o => ({
+      sys_id: o.sys_id,
+      name: o.name,
+      description: o.description,
+      reference: o.reference,
+      document: o.document,
+      document_name: sn_compliance_authority_document.find(d => d.sys_id === o.document)?.name || ''
+    }));
+  }
+
+  async createCitationMapping(authorityDocSysId: string, obligationSysId: string, justification: string): Promise<boolean> {
+    if (!this.useLive) {
+      const obl = sn_compliance_citation.find(o => o.sys_id === obligationSysId);
+      if (obl) {
+        obl.document = authorityDocSysId;
+      }
+      console.log(`[ServiceNow DB UPDATE] Table [sn_compliance_citation] row [${obligationSysId}] -> u_ai_recommendation / comments: [Justification written]`);
+      return true;
+    }
+    try {
+      try {
+        await this.putRecord('sn_compliance_citation', obligationSysId, {
+          document: authorityDocSysId,
+          comments: justification,
+          u_ai_recommendation: justification
+        });
+        return true;
+      } catch {
+        await this.putRecord('sn_compliance_citation', obligationSysId, {
+          document: authorityDocSysId,
+          comments: justification
+        });
+        return true;
+      }
+    } catch (e) {
+      console.warn(`[ServiceNowAdapter] Failed to create citation mapping: ${(e as Error).message}`);
+      return false;
+    }
+  }
+
+  async createObligation(obligation: { name: string; description: string; document: string; source: string; justification?: string }): Promise<any> {
+    const just = obligation.justification || `Auto-created: ${obligation.source}`;
+    if (!this.useLive) {
+      const newObl = {
+        sys_id: `obl_mock_${Date.now()}`,
+        name: obligation.name,
+        description: obligation.description,
+        document: obligation.document,
+        reference: obligation.name,
+        sys_created_on: new Date().toISOString()
+      };
+      sn_compliance_citation.push(newObl);
+      console.log(`[ServiceNow DB UPDATE] Created obligation [${obligation.name}] with justification in u_ai_recommendation.`);
+      return newObl;
+    }
+    try {
+      let result;
+      try {
+        result = await this.postRecord('sn_compliance_citation', {
+          name: obligation.name,
+          description: obligation.description,
+          document: obligation.document,
+          reference: obligation.name,
+          comments: just,
+          u_ai_recommendation: just
+        });
+      } catch {
+        result = await this.postRecord('sn_compliance_citation', {
+          name: obligation.name,
+          description: obligation.description,
+          document: obligation.document,
+          reference: obligation.name,
+          comments: just
+        });
+      }
+      return result;
+    } catch (e) {
+      console.warn(`[ServiceNowAdapter] Failed to create obligation: ${(e as Error).message}`);
+      return null;
+    }
+  }
+
+  async writeAuthorityDocumentSummary(authorityDocSysId: string, narrativeHtml: string): Promise<boolean> {
+    if (this.useLive) {
+      const candidateTables = ['sn_compliance_authority_document', 'sn_compliance_document', 'sn_grc_document'];
+      for (const table of candidateTables) {
+        try {
+          const persisted = await this.putRecord(table, authorityDocSysId, { u_ai_recommendation: narrativeHtml });
+          const verified = this.isVerified(persisted, ['u_ai_recommendation']);
+          console.log(`[ServiceNow LIVE UPDATE] ${verified ? 'Wrote and verified' : 'Wrote'} u_ai_recommendation on ${table} ${authorityDocSysId}.`);
+          return true;
+        } catch (e: any) {
+          console.warn(`[ServiceNow LIVE UPDATE] Failed to write u_ai_recommendation on ${table}: ${e.message}`);
+        }
+      }
+      return false;
+    }
+
+    console.log(`[ServiceNow DB UPDATE] Table [sn_compliance_authority_document] row [${authorityDocSysId}] -> u_ai_recommendation: [HTML justification summary written]`);
+    return true;
+  }
+
+  // ── Citation to Risk Mapping Agent Methods (FEM-OC-01 to FEM-OC-06) ───
+
+  async getAllEntities(): Promise<Array<{ sysId: string; name: string; type?: string; description?: string }>> {
+    if (this.useLive) {
+      const candidateTables = ['sn_grc_profile', 'sn_grc_entity', 'cmdb_ci_business_app'];
+      for (const table of candidateTables) {
+        try {
+          const results = await this.queryTable<any>(table, {
+            sysparm_fields: 'sys_id,name,short_description,description,type,sys_class_name',
+            sysparm_query: 'ORDERBYname'
+          });
+          if (results && results.length > 0) {
+            console.log(`[ServiceNowAdapter] Found ${results.length} live entities in ${table}`);
+            return results.map((record: any) => ({
+              sysId: getValue(record.sys_id),
+              name: getDisplayValue(record.name) || getDisplayValue(record.short_description) || 'Unnamed Entity',
+              type: getDisplayValue(record.type) || getDisplayValue(record.sys_class_name) || 'Business Process',
+              description: getDisplayValue(record.description) || getDisplayValue(record.short_description) || ''
+            }));
+          }
+        } catch (e: any) {
+          console.warn(`[ServiceNowAdapter] Live getAllEntities failed on ${table}: ${e.message}`);
+        }
+      }
+    }
+
+    // Mock fallback
+    return sn_grc_profile.map(e => ({
+      sysId: e.sys_id,
+      name: e.name,
+      type: e.type,
+      description: e.description
+    }));
+  }
+
+  async getCitation(citationSysId: string): Promise<any> {
+    if (this.useLive) {
+      const candidateTables = ['sn_compliance_citation', 'sn_compliance_policy_statement'];
+      for (const table of candidateTables) {
+        try {
+          const results = await this.queryTable<any>(table, {
+            sysparm_query: `sys_id=${citationSysId}`,
+            sysparm_fields: 'sys_id,name,short_description,description,reference,document,sys_created_on'
+          });
+          if (results && results.length > 0) {
+            const record = results[0];
+            return {
+              sys_id: getValue(record.sys_id),
+              sysId: getValue(record.sys_id),
+              name: getDisplayValue(record.name) || getDisplayValue(record.short_description) || 'Unnamed Citation',
+              description: getDisplayValue(record.description) || getDisplayValue(record.short_description),
+              reference: getDisplayValue(record.reference),
+              document: getValue(record.document),
+              document_name: getDisplayValue(record.document)
+            };
+          }
+        } catch (e: any) {
+          console.warn(`[ServiceNowAdapter] getCitation query ${table} failed: ${e.message}`);
+        }
+      }
+    }
+
+    // Mock fallback
+    const mock = sn_compliance_citation.find(c => c.sys_id === citationSysId);
+    if (mock) {
+      return {
+        sys_id: mock.sys_id,
+        sysId: mock.sys_id,
+        name: mock.name,
+        description: mock.description,
+        reference: mock.reference,
+        document: mock.document,
+        document_name: sn_compliance_authority_document.find(d => d.sys_id === mock.document)?.name || ''
+      };
+    }
+    return null;
+  }
+
+  async linkCitationToRisk(riskSysId: string, citationSysId: string, justification: string): Promise<boolean> {
+    if (this.useLive) {
+      try {
+        // FEM-OC-06: Map at the join layer — read existing u_citations, append, deduplicate
+        const existing = await this.queryTable<any>('sn_risk_risk', {
+          sysparm_query: `sys_id=${riskSysId}`,
+          sysparm_fields: 'sys_id,u_citations'
+        });
+        let currentCitations = '';
+        if (existing && existing.length > 0) {
+          currentCitations = getValue(existing[0].u_citations);
+        }
+        const citationSet = new Set(currentCitations.split(',').map(s => s.trim()).filter(Boolean));
+        citationSet.add(citationSysId);
+        const updatedCitations = Array.from(citationSet).join(',');
+
+        try {
+          await this.putRecord('sn_risk_risk', riskSysId, {
+            u_citations: updatedCitations,
+            u_ai_recommendation: justification
+          });
+        } catch {
+          await this.putRecord('sn_risk_risk', riskSysId, {
+            u_citations: updatedCitations
+          });
+        }
+        console.log(`[ServiceNow LIVE UPDATE] Risk ${riskSysId} u_citations updated to: ${updatedCitations}`);
+        return true;
+      } catch (e: any) {
+        console.warn(`[ServiceNowAdapter] Failed to link citation to risk: ${e.message}`);
+        return false;
+      }
+    }
+
+    // Mock mode
+    const risk = sn_risk_risk.find(r => r.sys_id === riskSysId);
+    if (risk) {
+      const citationSet = new Set((risk.u_citations || '').split(',').map(s => s.trim()).filter(Boolean));
+      citationSet.add(citationSysId);
+      risk.u_citations = Array.from(citationSet).join(',');
+      risk.u_ai_recommendation = justification;
+      console.log(`[ServiceNow DB UPDATE] Table [sn_risk_risk] row [${riskSysId}] -> u_citations: [${risk.u_citations}]`);
+    }
+    return true;
+  }
+
+  async createRiskForEntity(risk: {
+    name: string;
+    description: string;
+    profileSysId: string;
+    citationSysId: string;
+    justification?: string;
+    draft?: boolean;
+    category?: string;
+  }): Promise<any> {
+    const just = risk.justification || `Auto-created from citation ${risk.citationSysId}`;
+    const riskName = risk.draft ? `[DRAFT] ${risk.name}` : risk.name;
+
+    if (this.useLive) {
+      try {
+        let result;
+        try {
+          result = await this.postRecord('sn_risk_risk', {
+            name: riskName,
+            description: risk.description,
+            profile: risk.profileSysId,
+            u_citations: risk.citationSysId,
+            u_ai_recommendation: just,
+            category: risk.category || 'Regulatory / Compliance'
+          });
+        } catch {
+          result = await this.postRecord('sn_risk_risk', {
+            name: riskName,
+            description: risk.description,
+            profile: risk.profileSysId,
+            u_citations: risk.citationSysId
+          });
+        }
+        console.log(`[ServiceNow LIVE CREATE] Created risk "${riskName}" for entity ${risk.profileSysId} with u_citations=${risk.citationSysId}`);
+        return result;
+      } catch (e: any) {
+        console.warn(`[ServiceNowAdapter] Failed to create risk for entity: ${e.message}`);
+        return null;
+      }
+    }
+
+    // Mock mode
+    const entityProfile = sn_grc_profile.find(p => p.sys_id === risk.profileSysId);
+    const newRisk = {
+      sys_id: `risk_draft_${Date.now()}`,
+      name: riskName,
+      description: risk.description,
+      profile: risk.profileSysId,
+      profile_name: entityProfile?.name || 'Unknown Entity',
+      u_citations: risk.citationSysId,
+      u_ai_recommendation: just
+    };
+    sn_risk_risk.push(newRisk);
+    console.log(`[ServiceNow DB UPDATE] Created ${risk.draft ? 'DRAFT ' : ''}risk [${newRisk.name}] for entity [${entityProfile?.name}] with u_citations=[${risk.citationSysId}]`);
+    return newRisk;
+  }
+
+  async writeCitationSummary(citationSysId: string, narrativeHtml: string): Promise<boolean> {
+    if (this.useLive) {
+      const candidateTables = ['sn_compliance_citation', 'sn_compliance_policy_statement'];
+      for (const table of candidateTables) {
+        try {
+          let persisted;
+          try {
+            persisted = await this.putRecord(table, citationSysId, { u_ai_recommendation: narrativeHtml, comments: narrativeHtml });
+          } catch {
+            persisted = await this.putRecord(table, citationSysId, { u_ai_recommendation: narrativeHtml });
+          }
+          const verified = this.isVerified(persisted, ['u_ai_recommendation']);
+          console.log(`[ServiceNow LIVE UPDATE] ${verified ? 'Wrote and verified' : 'Wrote'} u_ai_recommendation on ${table} ${citationSysId}.`);
+          return true;
+        } catch (e: any) {
+          console.warn(`[ServiceNow LIVE UPDATE] Failed to write u_ai_recommendation on ${table}: ${e.message}`);
+        }
+      }
+      return false;
+    }
+
+    // Mock fallback mode: persist justification narrative on mock citation record
+    const mock = sn_compliance_citation.find(c => c.sys_id === citationSysId);
+    if (mock) {
+      (mock as any).u_ai_recommendation = narrativeHtml;
+      (mock as any).comments = narrativeHtml;
+    }
+    console.log(`[ServiceNow DB UPDATE] Table [sn_compliance_citation] row [${citationSysId}] -> u_ai_recommendation: [HTML justification summary written]`);
+    return true;
+  }
+
+  // ── Regulatory Decomposition Methods (FEM-RD-01 to FEM-RD-10) ───
+
+  async getAuthorityDocumentDetails(docSysId: string): Promise<{
+    sys_id: string;
+    name: string;
+    number?: string;
+    type?: string;
+    description: string;
+    version?: string;
+    source_payload?: string;
+  } | null> {
+    const doc = await this.getAuthorityDocument(docSysId);
+    if (!doc) return null;
+    return {
+      sys_id: doc.sys_id || doc.sysId || docSysId,
+      name: doc.name || 'Unnamed Authority Document',
+      number: doc.number || '',
+      type: doc.type || 'Regulation',
+      description: doc.description || '',
+      version: (doc as any).version || (doc as any).u_version || '1.0',
+      source_payload: (doc as any).source_payload || (doc as any).u_source_text || doc.description
+    };
+  }
+
+  async getPreviousDocumentVersion(docSysId: string): Promise<{
+    sys_id: string;
+    name: string;
+    version?: string;
+    description: string;
+  } | null> {
+    if (this.useLive) {
+      try {
+        const results = await this.queryTable<any>('sn_compliance_authority_document', {
+          sysparm_query: `u_previous_version=${docSysId}^ORparent=${docSysId}`,
+          sysparm_fields: 'sys_id,name,description,version,u_version'
+        });
+        if (results && results.length > 0) {
+          const r = results[0];
+          return {
+            sys_id: getValue(r.sys_id),
+            name: getDisplayValue(r.name),
+            version: getDisplayValue(r.version) || getDisplayValue(r.u_version) || '1.0',
+            description: getDisplayValue(r.description)
+          };
+        }
+      } catch (e: any) {
+        console.warn(`[ServiceNowAdapter] getPreviousDocumentVersion failed: ${e.message}`);
+      }
+    }
+    return null;
+  }
+
+  async saveDecomposedObligations(docSysId: string, obligations: Array<{
+    duty: string;
+    citation_reference: string;
+    proposed_name: string;
+    proposed_description: string;
+    applicability_proposal: string;
+    applicability_rationale: string;
+    duplicate_status?: string;
+    linked_existing_sys_id?: string;
+    change_type?: string;
+  }>): Promise<any[]> {
+    const saved: any[] = [];
+
+    for (const obl of obligations) {
+      if (obl.duplicate_status === 'exact_duplicate' && obl.linked_existing_sys_id) {
+        // FEM-RD-05: Link to existing record
+        await this.createCitationMapping(docSysId, obl.linked_existing_sys_id, `Linked existing duty: ${obl.duty}`);
+        saved.push({ sys_id: obl.linked_existing_sys_id, name: obl.proposed_name, action: 'linked_existing' });
+        continue;
+      }
+
+      // FEM-RD-02, FEM-RD-03, FEM-RD-07: Create new single-duty obligation
+      const justification = `[FEM-RD Duty] ${obl.duty}\n[Hierarchy] ${obl.citation_reference}\n[Applicability] ${obl.applicability_proposal.toUpperCase()}: ${obl.applicability_rationale}`;
+      
+      const created = await this.createObligation({
+        name: obl.proposed_name,
+        description: obl.proposed_description,
+        document: docSysId,
+        source: obl.citation_reference,
+        justification
+      });
+
+      if (created) {
+        saved.push({ ...created, action: 'created' });
+      }
+    }
+
+    return saved;
   }
 }
