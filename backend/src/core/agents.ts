@@ -1,9 +1,15 @@
+// ============================================================================
+// GRC Autonomous Agents Framework
+// Spec: See agents.md for agent contracts and lifecycles
+// Skills: See skills.md for modular capabilities (SKILL-01 through SKILL-12)
+// ============================================================================
 import axios from 'axios';
 import { BaseGRCAdapter } from '../adapters/base';
 import { BaseLLMClient, ToolDeclaration } from '../llm/llm_client';
 import { Risk, Control, TestEvidence, Factor } from './models';
 import { AgentTracer } from './tracer';
 import { FieldMetadataUtils } from './field_metadata_utils';
+import { promptLoader } from './markdown_prompt_loader';
 
 // ============================================================================
 // Helper: Determinstic Evidence Fingerprinting
@@ -682,17 +688,11 @@ export class ControlEffectivenessAgent {
     }).join('\n\n');
 
     const prompt = [
-      'You are Ema, now reviewing your own draft control-effectiveness ratings as a second, independent pass.',
-      'For each control below, a first pass already produced a draft rating and justification from the evidence shown.',
-      'Check whether the draft rating actually follows from that evidence — not whether you would phrase it differently.',
+      promptLoader.getCritiqueInstructions('ControlEffectivenessAgent'),
       '',
       blocks,
       '',
-      'For each control: if the draft rating is well-supported by the evidence, respond with action="confirm" and repeat',
-      'the exact same rating. If it is not — e.g. it ignored an open issue, treated a passing test as evidence for a',
-      'rating the evidence does not support, or the rating isn\'t one of that control\'s valid options — respond with',
-      'action="revise", provide the corrected rating (copied EXACTLY from that control\'s valid ratings list), and explain',
-      'in "note" specifically what the first pass got wrong.',
+      'For each control: if the draft rating is well-supported by the evidence, respond with action="confirm" and repeat the exact same rating. If not supported, respond with action="revise", provide the corrected rating (copied EXACTLY from valid ratings), and explain what was wrong.',
       '',
       'Respond ONLY with valid JSON, no markdown:',
       '{"reviews": [{"index": 1, "action": "confirm", "rating": "<same or corrected, exact valid option>", "note": ""}, ...]}'
@@ -726,7 +726,7 @@ export class ControlEffectivenessAgent {
     try {
       const response = await this.llm.generateStructuredOutput<{ reviews: Array<{ index: number; action: string; rating: string; note?: string }> }>(
         prompt,
-        'You are Ema, acting as an independent second reviewer of draft GRC ratings.',
+        promptLoader.getAgentSystemPrompt('ControlEffectivenessAgent', 'You are Ema, acting as an independent second reviewer of draft GRC ratings.'),
         schema
       );
       tracer.log('RESPONSE', {
@@ -801,40 +801,7 @@ export class ControlEffectivenessAgent {
       };
     }
 
-    const tools: ToolDeclaration[] = [
-      {
-        name: 'get_control_details',
-        description: "Get this control's own name and description.",
-        parameters: { type: 'OBJECT', properties: {} }
-      },
-      {
-        name: 'get_test_evidence',
-        description: 'Get recorded control test evidence for this control: each test\'s status, effectiveness, health, latest result, result date, and any test-level open issues.',
-        parameters: { type: 'OBJECT', properties: {} }
-      },
-      {
-        name: 'get_associated_issues',
-        description: 'Get open (not yet Closed Complete) issues associated directly with this control.',
-        parameters: { type: 'OBJECT', properties: {} }
-      },
-      {
-        name: 'get_prior_assessment',
-        description: 'Get the rating and reasoning from the last closed assessment of this risk, if one exists. If this control is being evaluated at all, its evidence has changed since then, so treat this as context, not the answer.',
-        parameters: { type: 'OBJECT', properties: {} }
-      },
-      {
-        name: 'submit_assessment',
-        description: `Finalize your assessment once you have gathered enough evidence to be confident. rating must be copied EXACTLY from: ${choiceStr}.`,
-        parameters: {
-          type: 'OBJECT',
-          properties: {
-            rating: { type: 'STRING' },
-            justification: { type: 'STRING' }
-          },
-          required: ['rating', 'justification']
-        }
-      }
-    ];
+    const tools: ToolDeclaration[] = promptLoader.getControlEffectivenessTools(choiceStr);
 
     const executeTool = async (name: string, _args: any): Promise<any> => {
       switch (name) {
@@ -876,42 +843,27 @@ export class ControlEffectivenessAgent {
       }
     };
 
-    const initialPrompt = [
-      'You are assessing the OPERATING effectiveness of ONE control against a risk.',
-      '',
-      `RISK: ${risk.name}`,
-      `Description: ${risk.description || 'N/A'}`,
-      `${entityLabel}: ${risk.profileName}`,
-      `CONTROL: ${item.controlName}`,
-      '',
-      `Valid ratings for this control (you must pick exactly one, copied exactly): ${choiceStr}`,
-      '',
-      'You do NOT have any evidence yet — use the available tools to gather whatever you judge necessary (control',
-      'details, test evidence, associated issues, prior assessment) before deciding. Call as many or as few as you',
-      'need; you are not required to call every tool.',
-      '',
-      'Apply this methodology once you have evidence:',
-      '1. DESIGN vs OPERATING effectiveness differ — rate on demonstrated operating performance, not on whether the',
-      '   control sounds appropriate on paper.',
-      '2. A completed test with a recorded status/effectiveness IS valid evidence on its own.',
-      '3. Evidence from long ago carries less confidence than recent evidence.',
-      '4. Open issues are real-world evidence the control is not operating as designed — weigh them against the tests;',
-      '   an actual failure in practice outweighs a formal passing test.',
-      '5. NO test evidence at all → select the WEAKEST valid rating and say so in the justification.',
-      '6. Treat missing/absent data as UNKNOWN, not as evidence of good or bad performance.',
-      '7. Base your rating on the evidence holistically, not any single fact in isolation.',
-      '',
-      'When you have enough evidence, call submit_assessment with your final rating and a 1-2 sentence justification',
-      'citing the specific evidence that drove it.'
-    ].join('\n');
+    const initialPrompt = promptLoader.getControlEffectivenessPrompt({
+      riskName: risk.name,
+      riskDesc: risk.description || 'N/A',
+      entityLabel,
+      profileName: risk.profileName,
+      controlName: item.controlName,
+      choiceStr
+    });
 
     tracer.log('REQUEST', {
       control: item.controlName,
       prompt_preview: initialPrompt
     });
 
+    const systemInstruction = promptLoader.getAgentSystemPrompt(
+      'ControlEffectivenessAgent',
+      'You are Ema, a GRC control-effectiveness assessment agent. You investigate before you conclude: gather evidence via the available tools, then submit exactly one final assessment.'
+    );
+
     const loop = await this.llm.runToolLoop<{ rating: string; justification: string }>(
-      'You are Ema, a GRC control-effectiveness assessment agent. You investigate before you conclude: gather evidence via the available tools, then submit exactly one final assessment.',
+      systemInstruction,
       initialPrompt,
       tools,
       'submit_assessment',
@@ -1425,66 +1377,9 @@ export class InherentAssessmentAgent {
   ): Promise<{ rating: string; score: number; justification: string; issueRelevant: boolean; relevantIssues: string[]; issueNote: string; toolCallLog: Array<{ name: string; args: any }>; evidenceData?: { [key: string]: any } } | null> {
     const choiceStr = factor.choiceList.join(', ');
 
-    // Enhanced tools array: add factor-specific data sources (Financial, Regulatory, Customer, Reputational)
-    const tools: ToolDeclaration[] = [
-      {
-        name: 'get_factor_guidance',
-        description: "Get this factor's own description and rating-band guidance.",
-        parameters: { type: 'OBJECT', properties: {} }
-      },
-      {
-        name: 'get_entity_issues',
-        description: `Get unresolved (not Closed Complete) issues logged against this risk's ${entityLabel.toLowerCase()}, with priority.`,
-        parameters: { type: 'OBJECT', properties: {} }
-      }
-    ];
-
-    // Add factor-specific tools based on the factor name
+    // Tools are declared in skills.md (SKILL-02, SKILL-03, SKILL-04) and built by promptLoader
     const factorNameLower = (factor.factorName || '').toLowerCase();
-    if (factorNameLower.includes('financial')) {
-      tools.push({
-        name: 'get_financial_evidence',
-        description: 'Get financial risk events (expected loss, impact) directly linked to this risk.',
-        parameters: { type: 'OBJECT', properties: {} }
-      });
-    }
-    if (factorNameLower.includes('regulatory') || factorNameLower.includes('legal')) {
-      tools.push({
-        name: 'get_regulatory_evidence',
-        description: 'Get regulatory evidence: compliance exams, GRC issues (formal findings, observations), and regulatory internet search results (SEC EDGAR, Federal Reserve, OCC).',
-        parameters: { type: 'OBJECT', properties: {} }
-      });
-    }
-    if (factorNameLower.includes('customer') || factorNameLower.includes('conduct') || factorNameLower.includes('market')) {
-      tools.push({
-        name: 'get_customer_evidence',
-        description: 'Get customer impact evidence: incidents by type, affected customer count, and active incidents.',
-        parameters: { type: 'OBJECT', properties: {} }
-      });
-    }
-    if (factorNameLower.includes('reputational') || factorNameLower.includes('reputation')) {
-      tools.push({
-        name: 'get_reputational_evidence',
-        description: 'Get reputational evidence: external events, media mentions, sentiment analysis, and internet search results (Google News, Reddit, Bing News).',
-        parameters: { type: 'OBJECT', properties: {} }
-      });
-    }
-
-    tools.push({
-      name: 'submit_rating',
-      description: `Finalize your assessment once you have gathered enough evidence. rating must be copied EXACTLY from: ${choiceStr}.`,
-      parameters: {
-        type: 'OBJECT',
-        properties: {
-          rating: { type: 'STRING' },
-          issue_relevant: { type: 'BOOLEAN' },
-          relevant_issues: { type: 'ARRAY', items: { type: 'STRING' } },
-          issue_note: { type: 'STRING' },
-          justification: { type: 'STRING' }
-        },
-        required: ['rating', 'issue_relevant', 'justification']
-      }
-    });
+    const tools: ToolDeclaration[] = promptLoader.getInherentFactorTools(choiceStr, factorNameLower, entityLabel);
 
     // Track evidence as tools are called, to include in rating justification
     const evidenceData: { [key: string]: any } = {};
@@ -1525,46 +1420,15 @@ export class InherentAssessmentAgent {
       }
     };
 
-    const initialPrompt = [
-      'You are assessing an INHERENT RISK FACTOR — the level of risk that exists before any controls are applied.',
-      'Assess conservatively and specifically, like a rigorous risk manager who does not inflate ratings without',
-      'factor-specific justification.',
-      '',
-      `RISK: ${risk.name}`,
-      `Description: ${risk.description || 'No description provided.'}`,
-      `${entityLabel}: ${risk.profileName}`,
-      `FACTOR TO ASSESS: ${factor.factorName}`,
-      '',
-      `Valid ratings for this factor (you must pick exactly one, copied exactly): ${choiceStr}`,
-      '',
-      'You do NOT have the factor\'s rubric or the issue list yet — use the available tools to gather whatever you',
-      'judge necessary before deciding. Call as many or as few as you need.',
-      '',
-      'Apply this methodology once you have evidence:',
-      '1. Match the risk against the factor\'s own rubric bands (from get_factor_guidance) — cite the specific band',
-      `   you matched, not just the factor name in isolation.`,
-      `2. Judge issue relevance PER FACTOR, not globally: an unresolved issue on the ${entityLabel.toLowerCase()} is`,
-      '   evidence ONLY for the specific dimension it actually relates to. Do not raise this rating just because',
-      `   an issue exists somewhere on the ${entityLabel.toLowerCase()} — ask whether its subject genuinely bears`,
-      '   on this specific factor.',
-      '3. Where an issue is genuinely relevant, weigh it by priority: a Critical or High priority unresolved issue',
-      '   is stronger evidence toward a weaker rating than a Low priority one; a relevant Low priority issue can be',
-      '   noted but should rarely move the rating alone.',
-      '4. Be honest about your basis: where no relevant issue exists, ServiceNow has no entity-specific data for',
-      '   this factor, so your rating is an ESTIMATE from the rubric thresholds and domain knowledge. Only where a',
-      '   relevant issue exists is the rating partly GROUNDED in real data. For regulatory/environment-type factors',
-      '   you may reason about the broader real-world landscape, clearly noting it as external reasoning.',
-      '5. CRITICAL: When submitting your rating, you MUST structure your justification with specific evidence numbers and sections:',
-      '   • WHY THIS RATING WAS CHOSEN: Explicitly state "As per the attached factor guidance rubric, this factor is rated [Rating] because..." Cite the specific rubric band matched, key drivers with exact numbers ($ loss figures, exam counts, formal orders, affected customer counts, media mentions), and compare directly against rubric thresholds.',
-      '   • HOW ACCURATE & GROUNDED: State confidence level, table records evaluated, and why specific records were deemed relevant vs filtered out.',
-      '   • CONCLUSION: Concise executive synthesis.',
-      '   • STYLE: Write in professional, audit-ready executive language. Do NOT mention internal tool/function names (e.g. get_regulatory_evidence, submit_rating) or internal system IDs.',
-      '',
-      'When you have enough evidence, call submit_rating with your final rating; issue_relevant (true only if a',
-      'specific issue genuinely influenced THIS factor); relevant_issues (the exact issue description text for each',
-      'issue that applied, empty array otherwise); issue_note (one short phrase, under 15 words, on why issues were',
-      'or weren\'t relevant); and justification (must include the structured WHY, HOW ACCURATE, and CONCLUSION sections).'
-    ].join('\n');
+    // Prompt and system instruction are defined in agents.md (InherentAssessmentAgent) and skills.md (SKILL-02)
+    const initialPrompt = promptLoader.getInherentFactorPrompt({
+      riskName: risk.name,
+      riskDesc: risk.description || 'N/A',
+      entityLabel,
+      profileName: risk.profileName,
+      factorName: factor.factorName,
+      choiceStr
+    });
 
     tracer.log('REQUEST', {
       factor: factor.factorName,
@@ -1572,7 +1436,7 @@ export class InherentAssessmentAgent {
     });
 
     const loop = await this.llm.runToolLoop<{ rating: string; issue_relevant: boolean; relevant_issues?: string[]; issue_note?: string; justification: string }>(
-      'You are Ema, an inherent risk factor evaluator. You investigate before you conclude: gather the rubric and issue context via the available tools, then submit exactly one final rating.',
+      promptLoader.getInherentFactorSystemPrompt(),
       initialPrompt,
       tools,
       'submit_rating',
@@ -1636,22 +1500,8 @@ export class InherentAssessmentAgent {
       return `[${idx + 1}] FACTOR: ${d.factor.factorName}\n    Guidance: ${d.factor.guidance || '(none provided)'}\n    Valid ratings: ${choiceStr}\n    DRAFT RATING: ${d.rating}\n    DRAFT ISSUE RELEVANCE: ${d.issueRelevant ? 'relevant — ' + d.relevantIssues.join('; ') : 'not relevant'}${d.issueNote ? ' (' + d.issueNote + ')' : ''}\n    DRAFT JUSTIFICATION: ${d.justification}`;
     }).join('\n\n');
 
-    const prompt = [
-      'You are Ema, now reviewing your own draft inherent-risk-factor ratings as a second, independent pass.',
-      'For each factor below, a first pass already produced a draft rating from the rubric and issue context shown.',
-      'Check whether the draft rating actually follows from that rubric — not whether you would phrase it differently.',
-      '',
-      blocks,
-      '',
-      'For each factor: if the draft rating is well-supported, respond with action="confirm" and repeat the exact same',
-      'rating. If it is not — e.g. it matched the wrong rubric band, inflated the rating from an issue that isn\'t',
-      'genuinely relevant to this factor, or the rating isn\'t one of the valid options — respond with action="revise",',
-      'provide the corrected rating (copied EXACTLY from that factor\'s valid ratings list), and explain in "note"',
-      'specifically what the first pass got wrong.',
-      '',
-      'Respond ONLY with valid JSON, no markdown:',
-      '{"reviews": [{"index": 1, "action": "confirm", "rating": "<same or corrected, exact valid option>", "note": ""}, ...]}'
-    ].join('\n');
+    // Critique prompt and rubric are defined in skills.md (SKILL-05) via promptLoader
+    const prompt = promptLoader.getInherentCritiquePrompt(blocks);
 
     const schema = {
       type: 'OBJECT',
@@ -1681,7 +1531,7 @@ export class InherentAssessmentAgent {
     try {
       const response = await this.llm.generateStructuredOutput<{ reviews: Array<{ index: number; action: string; rating: string; note?: string }> }>(
         prompt,
-        'You are Ema, acting as an independent second reviewer of draft GRC ratings.',
+        promptLoader.getAgentSystemPrompt('InherentAssessmentAgent', 'You are Ema, acting as an independent second reviewer of draft GRC ratings.'),
         schema
       );
       tracer.log('RESPONSE', {
@@ -1737,23 +1587,8 @@ export class InherentAssessmentAgent {
 
     const lines = rated.map(r => `- ${r.factor} [${r.rating}]: ${r.justification}`).join('\n');
 
-    const prompt = [
-      'You are Ema, writing an executive summary for a compliance manager reviewing inherent risk factor',
-      'ratings for one risk. Below are the individual factor ratings and their supporting rationale — internal',
-      'reference only, not to be repeated verbatim.',
-      '',
-      lines,
-      calcBlock,
-      '',
-      'TASK: Write a concise, professional narrative (3-5 sentences) summarizing the overall inherent risk picture',
-      'for this risk: the general rating picture across factors, the most significant recurring themes or drivers',
-      '(e.g. regulatory exposure, unresolved entity issues, data sensitivity), and any notable concentrations of risk.',
-      'Do NOT list or name individual factors one by one — synthesize, don\'t enumerate.',
-      'Do NOT mention internal AI/system processing or how this summary was produced.',
-      '',
-      'Respond ONLY with valid JSON, no markdown:',
-      '{"summary": "<3-5 sentence narrative>"}'
-    ].join('\n');
+    // Synthesis prompt is defined in agents.md (InherentAssessmentAgent) via promptLoader
+    const prompt = promptLoader.getInherentJustificationSynthesisPrompt(lines, calcBlock);
 
     const schema = {
       type: 'OBJECT',
@@ -1763,7 +1598,7 @@ export class InherentAssessmentAgent {
 
     let summary = '';
     try {
-      const parsed = await this.llm.generateStructuredOutput<{ summary: string }>(prompt, 'You are Ema, a GRC compliance-narrative writer.', schema);
+      const parsed = await this.llm.generateStructuredOutput<{ summary: string }>(prompt, promptLoader.getAgentSystemPrompt('InherentAssessmentAgent', 'You are Ema, a GRC compliance-narrative writer.'), schema);
       summary = parsed.summary || '';
     } catch (e) {
       // Synthesis is a best-effort enrichment — never block the rest of the run on it.
@@ -2542,23 +2377,7 @@ export class RiskControlMappingAgent {
   // full risk/control text and entity issue data sit behind tools it must choose to
   // call, same investigate-before-concluding pattern as the other two agents.
   private buildMappingTools(risk: Risk, pool: Control[], entityLabel: string): { tools: ToolDeclaration[]; executeTool: (name: string, args: any) => Promise<any> } {
-    const tools: ToolDeclaration[] = [
-      {
-        name: 'get_risk_full_description',
-        description: "Get this risk's full, untruncated description (the description shown above may be truncated).",
-        parameters: { type: 'OBJECT', properties: {} }
-      },
-      {
-        name: 'get_control_full_description',
-        description: 'Get the full, untruncated name and description for one candidate control by its index number shown in the list above (descriptions there may be truncated).',
-        parameters: { type: 'OBJECT', properties: { index: { type: 'INTEGER' } }, required: ['index'] }
-      },
-      {
-        name: 'get_entity_open_issues',
-        description: `Get currently open issues recorded against this ${entityLabel.toLowerCase()} — real-world evidence of what is currently going wrong, useful context for whether a candidate control is actually addressing live problems.`,
-        parameters: { type: 'OBJECT', properties: {} }
-      }
-    ];
+    const tools: ToolDeclaration[] = promptLoader.getMappingToolsDeclarations(entityLabel);
 
     const executeTool = async (name: string, args: any): Promise<any> => {
       switch (name) {
@@ -2582,67 +2401,29 @@ export class RiskControlMappingAgent {
   }
 
   // ── Single-shot path (control pool fits in one prompt) ───────────────────
-  // Deliberately kept as ONE call over the whole list rather than one tool-loop
-  // per control (unlike the other two agents' per-item pattern): this is a SET
-  // classification task, not a per-item rating, and seeing every candidate
-  // together is what lets the model reason comparatively ("this one is clearly
-  // the better fit, that one is redundant with an already-mapped control").
-  // Tool-calling is layered on top of that same list-classification shape —
-  // full risk/control text and entity issues sit behind tools instead of being
-  // dumped inline — rather than replacing it.
   private async mapControlsWithTools(
     risk: Risk, pool: Control[], alreadyMapped: Control[], entityLabel: string, tracer: AgentTracer
   ): Promise<{ matches: ResolvedControl[]; rejected: ResolvedControl[]; justification: string; gaps: string; recommendation: string } | null> {
     const { tools, executeTool } = this.buildMappingTools(risk, pool, entityLabel);
 
-    const schema = {
-      type: 'OBJECT',
-      properties: {
-        matches: {
-          type: 'ARRAY',
-          description: 'Controls that SHOULD be mapped — they address this risk.',
-          items: { type: 'OBJECT', properties: { index: { type: 'INTEGER' }, reason: { type: 'STRING', description: 'Why this control mitigates the risk' } }, required: ['index', 'reason'] }
-        },
-        rejected: {
-          type: 'ARRAY',
-          description: 'Controls that should NOT be mapped — they do not meet business criteria for this risk.',
-          items: { type: 'OBJECT', properties: { index: { type: 'INTEGER' }, reason: { type: 'STRING', description: 'Why this control does NOT mitigate the risk' } }, required: ['index', 'reason'] }
-        },
-        overall_justification: { type: 'STRING' },
-        gaps: { type: 'STRING' },
-        recommendation: { type: 'STRING', description: 'Only meaningful if gaps exist; empty string otherwise' }
-      },
-      required: ['matches', 'rejected', 'overall_justification', 'gaps']
-    };
-    tools.push({ name: 'submit_mapping', description: 'Finalize your control-mapping decision once you have gathered enough evidence.', parameters: schema });
+    tools.push({
+      name: 'submit_mapping',
+      description: 'Finalize your control-mapping decision once you have gathered enough evidence.',
+      parameters: promptLoader.getMappingSubmitSchema()
+    });
 
-    const initialPrompt = [
-      this.riskBlock(risk, entityLabel),
-      '(Description above may be truncated — call get_risk_full_description for the complete text.)',
-      this.alreadyMappedBlock(alreadyMapped),
-      '',
-      `CANDIDATE CONTROLS (${pool.length} total from this ${entityLabel}, not yet decided):`,
-      this.controlListBlock(pool),
-      '(Descriptions above may be truncated — call get_control_full_description(index) for the complete text on any control.)',
-      '',
-      'You may also call get_entity_open_issues for real-world evidence of what is currently going wrong for this',
-      `${entityLabel.toLowerCase()} — useful context for whether a candidate control actually addresses live problems.`,
-      '',
-      'TASK:',
-      '1. Select controls that GENUINELY mitigate this specific risk — be selective, do not force',
-      '   a match just because a control sounds broadly compliance-related. An empty matches list',
-      '   is a valid answer.',
-      '2. For EVERY control NOT selected, provide a concise rejection reason explaining why it does',
-      '   NOT meet the business criteria for this risk.',
-      '3. Provide overall justification, gaps (what this risk is NOT covered for — considering the',
-      '   already-mapped controls listed above too, not just what you just evaluated), and — only if',
-      '   gaps exist — specific recommendations for new controls to create.',
-      '',
-      'Use the available tools for anything you need beyond what is shown above, then call submit_mapping',
-      'with your final decision.'
-    ].join('\n');
+    const initialPrompt = promptLoader.getMappingInitialPrompt({
+      riskBlock: this.riskBlock(risk, entityLabel),
+      alreadyMappedBlock: this.alreadyMappedBlock(alreadyMapped),
+      candidateCount: pool.length,
+      entityLabel,
+      controlListBlock: this.controlListBlock(pool)
+    });
 
-    const systemInstruction = 'You are Ema, a GRC Compliance mapping architect. You investigate before you conclude: pull whatever additional evidence you judge necessary via the available tools, then finalize by calling submit_mapping. For every rejected control, explain why it does not address the business criteria of this specific risk.';
+    const systemInstruction = promptLoader.getAgentSystemPrompt(
+      'RiskControlMappingAgent',
+      'You are Ema, a GRC Compliance mapping architect. You investigate before you conclude: pull whatever additional evidence you judge necessary via the available tools, then finalize by calling submit_mapping. For every rejected control, explain why it does not address the business criteria of this specific risk.'
+    );
 
     tracer.log('REQUEST', { path: 'singleShot', prompt_preview: initialPrompt });
 
@@ -2679,35 +2460,24 @@ export class RiskControlMappingAgent {
   ): Promise<{ matches: ResolvedControl[]; rejected: ResolvedControl[] } | null> {
     const { tools, executeTool } = this.buildMappingTools(risk, chunk, entityLabel);
 
-    const batchSchema = {
-      type: 'OBJECT',
-      properties: {
-        matches: { type: 'ARRAY', items: { type: 'OBJECT', properties: { index: { type: 'INTEGER' }, reason: { type: 'STRING' } }, required: ['index', 'reason'] } },
-        rejected: { type: 'ARRAY', items: { type: 'OBJECT', properties: { index: { type: 'INTEGER' }, reason: { type: 'STRING' } }, required: ['index', 'reason'] } }
-      },
-      required: ['matches', 'rejected']
-    };
-    tools.push({ name: 'submit_mapping', description: 'Finalize your control-mapping decision for this batch.', parameters: batchSchema });
+    tools.push({
+      name: 'submit_mapping',
+      description: 'Finalize your control-mapping decision for this batch.',
+      parameters: promptLoader.getMappingBatchSubmitSchema()
+    });
 
-    const initialPrompt = [
-      this.riskBlock(risk, entityLabel),
-      '(Description above may be truncated — call get_risk_full_description for the complete text.)',
-      this.alreadyMappedBlock(alreadyMapped),
-      '',
-      `CANDIDATE CONTROLS — batch ${chunkIndex} of ${chunksTotal} (reference ONLY by the index number below, not yet decided):`,
-      this.controlListBlock(chunk),
-      '(Descriptions above may be truncated — call get_control_full_description(index) for the complete text.)',
-      '',
-      'You may also call get_entity_open_issues for real-world evidence of what is currently going wrong.',
-      '',
-      'TASK: From THIS BATCH ONLY, select controls that genuinely mitigate this risk (be selective,',
-      'an empty list is valid) and give every non-selected control a rejection reason. Do NOT provide',
-      'gap analysis or an overall justification — other batches exist that you cannot see here.',
-      '',
-      'Use the available tools for anything you need, then call submit_mapping with your decision for this batch.'
-    ].join('\n');
+    const initialPrompt = promptLoader.getMappingBatchInitialPrompt({
+      riskBlock: this.riskBlock(risk, entityLabel),
+      alreadyMappedBlock: this.alreadyMappedBlock(alreadyMapped),
+      chunkIndex,
+      chunksTotal,
+      controlListBlock: this.controlListBlock(chunk)
+    });
 
-    const systemInstruction = 'You are Ema, a GRC Compliance mapping architect reviewing one batch of a larger control library against a single risk. Investigate via the available tools before you conclude.';
+    const systemInstruction = promptLoader.getAgentSystemPrompt(
+      'RiskControlMappingAgent',
+      'You are Ema, a GRC Compliance mapping architect reviewing one batch of a larger control library against a single risk. Investigate via the available tools before you conclude.'
+    );
 
     tracer.log('REQUEST', { path: 'chunked_batch', batchIndex: chunkIndex, prompt_preview: initialPrompt });
 

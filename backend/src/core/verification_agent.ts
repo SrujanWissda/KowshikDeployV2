@@ -1,5 +1,6 @@
 // ============================================================================
-// Verification & Accountability Layer — pilot: Control Effectiveness only.
+// Verification & Accountability Layer (Agent 8 in agents.md, SKILL-11 in skills.md)
+// Pilot: Control Effectiveness independent cross-validation.
 //
 // This is a genuinely separate agent, not a second pass by the same producer.
 // It never reads or calls anything in agents.ts, and it writes to exactly one

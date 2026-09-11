@@ -1,3 +1,7 @@
+// ============================================================================
+// Universal Schema Discovery Agent (Agent 7 in agents.md, SKILL-10 in skills.md)
+// 4-stage pipeline: introspect -> vector-shortlist -> LLM-confirm -> sample-validate
+// ============================================================================
 import { BaseLLMClient } from '../llm/llm_client';
 import { BaseEmbeddingsClient } from '../llm/embeddings_client';
 import { VectorStore, computeSchemaFingerprint, ConceptVectorItem } from './vector_store';
