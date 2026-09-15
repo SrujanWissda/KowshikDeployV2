@@ -418,27 +418,42 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
         const results = await this.queryTable<any>('sn_risk_advanced_risk_assessment_instance_response', {
           sysparm_query: `assessment_instance_id=${instanceSysId}^controlISNOTEMPTY`
         });
-        return results.map(r => ({
-          sysId: getValue(r.sys_id),
-          factorSysId: getValue(r.factor),
-          factorName: getDisplayValue(r.factor),
-          controlSysId: getValue(r.control),
-          controlName: getDisplayValue(r.control)
-        }));
+        const rows: FactorResponse[] = [];
+        for (const r of results) {
+          const factorSysId = getValue(r.factor);
+          const choices = await this.getFactorChoices(factorSysId);
+          if (choices && choices.choiceList && choices.choiceList.length > 0) {
+            rows.push({
+              sysId: getValue(r.sys_id),
+              factorSysId,
+              factorName: getDisplayValue(r.factor),
+              controlSysId: getValue(r.control),
+              controlName: getDisplayValue(r.control)
+            });
+          }
+        }
+        return rows;
       } catch (e: any) {
         console.warn(`[ServiceNowAdapter] Failed to fetch live control factor responses, falling back to mock DB. Error: ${e.message}`);
       }
     }
 
-    return sn_risk_advanced_risk_assessment_instance_response
-      .filter(r => r.assessment_instance_id === instanceSysId && r.control !== '')
-      .map(r => ({
-        sysId: r.sys_id,
-        factorSysId: r.factor,
-        factorName: r.factor_name,
-        controlSysId: r.control,
-        controlName: r.control_name
-      }));
+    const rows: FactorResponse[] = [];
+    const candidateRows = sn_risk_advanced_risk_assessment_instance_response
+      .filter(r => r.assessment_instance_id === instanceSysId && r.control !== '');
+    for (const r of candidateRows) {
+      const choices = await this.getFactorChoices(r.factor);
+      if (choices && choices.choiceList && choices.choiceList.length > 0) {
+        rows.push({
+          sysId: r.sys_id,
+          factorSysId: r.factor,
+          factorName: r.factor_name,
+          controlSysId: r.control,
+          controlName: r.control_name
+        });
+      }
+    }
+    return rows;
   }
 
   async getAnswerableManualRows(instanceSysId: string): Promise<Factor[]> {
