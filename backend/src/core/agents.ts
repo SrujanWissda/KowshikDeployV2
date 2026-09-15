@@ -247,7 +247,7 @@ export class ControlEffectivenessAgent {
         if (prior && prior.fingerprint === fingerprint && prior.factorResponse) {
           const carriedScore = parseInt(prior.factorResponse, 10);
           const formattedComments = this.formatText(prior.comments);
-          const formattedJustification = `📋 EMA — Carried forward. No changes in control or tests since last assessment.\nRating: ${prior.ratingLabel}\nPrior reasoning: ${formattedComments}`;
+          const formattedJustification = `📋 EMA — Last assessment (${priorInstanceSysId.number || 'prior cycle'}) and new assessment: no change in control or tests since last assessment.\nRating: ${prior.ratingLabel}\nPrior reasoning: ${formattedComments}`;
           const verified = await writeVerified(tracer, `control ${row.controlName} (carried forward)`, () =>
             this.adapter.writeControlEffectiveness(
               row.sysId,
@@ -416,10 +416,10 @@ export class ControlEffectivenessAgent {
           `Rating: ${draft.rating}`,
           `Confidence: ${confidence}`,
           '',
-          'WHAT WAS SEARCHED:',
-          `  1. Control details — searched the control record and found: "${item.controlName}"`,
-          `  2. Control tests — searched the Control Tests related list on the control and found ${testCount} record${testCount !== 1 ? 's' : ''}: ${testDetailHuman}`,
-          `  3. Associated issues — searched the Associated Issues tab on the control and found ${allOpenIssues.length} record${allOpenIssues.length !== 1 ? 's' : ''} not yet Closed Complete: ${issueDetailHuman}`,
+          'WHAT WAS INVESTIGATED:',
+          `  1. Control details — investigated the control record and found: "${item.controlName}"`,
+          `  2. Control tests — investigated the Control Tests related list on the control and found ${testCount} record${testCount !== 1 ? 's' : ''}: ${testDetailHuman}`,
+          `  3. Associated issues — investigated the Associated Issues tab on the control and found ${allOpenIssues.length} record${allOpenIssues.length !== 1 ? 's' : ''} not yet Closed Complete: ${issueDetailHuman}`,
           `  4. Prior assessment history — ${priorLine}`,
           '',
           'CONCLUSION:',
@@ -439,12 +439,12 @@ export class ControlEffectivenessAgent {
           `🔍 EMA INVESTIGATION (TECHNICAL / AUDIT TRAIL) — Control Effectiveness Assessment`,
           `${htmlLabel('Rating:')} ${draft.rating}<br>${htmlLabel('Confidence:')} ${confidence}`,
           htmlEscape(toolsUsedLine),
-          htmlLabel('WHAT WAS SEARCHED (table-level detail):'),
+          htmlLabel('WHAT WAS INVESTIGATED (table-level detail):'),
           [
-            `&nbsp;&nbsp;1. Control details — searched sn_compliance_control (control record) and found: "${htmlEscape(item.controlName)}"`,
-            `&nbsp;&nbsp;2. Control tests — searched sn_audit_control_test (Control Tests related list on the control) and found ${testCount} record${testCount !== 1 ? 's' : ''}: ${htmlEscape(testDetailTech)}`,
-            `&nbsp;&nbsp;3. Associated issues — searched sn_grc_issue (Issue Management module, same records as the Associated Issues tab on the control) and found ${allOpenIssues.length} record${allOpenIssues.length !== 1 ? 's' : ''} not yet Closed Complete: ${htmlEscape(issueDetailTech)}`,
-            `&nbsp;&nbsp;4. Prior assessment history — searched ${htmlEscape(priorLineTech)}`
+            `&nbsp;&nbsp;1. Control details — investigated sn_compliance_control (control record) and found: "${htmlEscape(item.controlName)}"`,
+            `&nbsp;&nbsp;2. Control tests — investigated sn_audit_control_test (Control Tests related list on the control) and found ${testCount} record${testCount !== 1 ? 's' : ''}: ${htmlEscape(testDetailTech)}`,
+            `&nbsp;&nbsp;3. Associated issues — investigated sn_grc_issue (Issue Management module, same records as the Associated Issues tab on the control) and found ${allOpenIssues.length} record${allOpenIssues.length !== 1 ? 's' : ''} not yet Closed Complete: ${htmlEscape(issueDetailTech)}`,
+            `&nbsp;&nbsp;4. Prior assessment history — investigated ${htmlEscape(priorLineTech)}`
           ].join('<br>'),
           `${htmlLabel('CONCLUSION:')}<br>${htmlEscape(draft.justification)}`,
           `<i>Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}</i>`
@@ -988,7 +988,7 @@ export class InherentAssessmentAgent {
               carriedScore,
               prior.ratingLabel,
               formattedJustification,
-              `📋 EMA — Carried forward from prior closed assessment${priorInstanceSysId.number ? ' ' + priorInstanceSysId.number : ''}. No fresh evaluation this cycle.\nRating: ${prior.ratingLabel}\nPrior reasoning: ${this.formatForField(prior.comments, 'Risk__Risk_Assessment_Rating__c', 'Risk__Justification__c')}`,
+              `📋 EMA — Last assessment (${priorInstanceSysId.number || 'prior cycle'}) and new assessment: no change in risk profile or rating (${prior.ratingLabel}). No fresh evaluation needed this cycle.\nRating: ${prior.ratingLabel}\nPrior reasoning: ${this.formatForField(prior.comments, 'Risk__Risk_Assessment_Rating__c', 'Risk__Justification__c')}`,
               formattedJustification
             )
           );
@@ -1007,7 +1007,7 @@ export class InherentAssessmentAgent {
           writeInherentSummaryCF.call(
             this.adapter,
             inst.sysId,
-            `Carried forward from prior closed assessment${priorInstanceSysId.number ? ' ' + priorInstanceSysId.number : ''}. Ratings and supporting rationale were unchanged and reused without a new evaluation this cycle.`
+            `📋 EMA — Last assessment (${priorInstanceSysId.number || 'prior cycle'}) and new assessment: no change. Inherent factor ratings and supporting rationale remain consistent with the prior assessment cycle.`
           )
         );
       }
@@ -1136,8 +1136,8 @@ export class InherentAssessmentAgent {
       const issueRelevanceLine = issueCount === 0
         ? (isSalesforce ? 'no issues found on the business unit' : 'no issues found on the entity')
         : draft.issueRelevant
-          ? `${draft.relevantIssues.length} of the ${issueCount} unresolved issue(s) identified as relevant to this factor: ${draft.relevantIssues.join('; ')}${draft.issueNote ? ' — ' + draft.issueNote : ''}`
-          : `none of the ${issueCount} unresolved issue(s) were identified as relevant to this specific factor${draft.issueNote ? ' — ' + draft.issueNote : ''}`;
+          ? `${draft.relevantIssues.length} issue(s) identified as directly related to this risk: ${draft.relevantIssues.join('; ')}${draft.issueNote ? ' — ' + draft.issueNote : ''}`
+          : `none of the ${issueCount} unresolved entity issue(s) were related to this specific risk${draft.issueNote ? ' — ' + draft.issueNote : ''}`;
 
       const entitySearchLabel = isSalesforce ? 'Business Unit' : 'Entity';
       const searchTableLabel = isSalesforce ? "Business Unit's Downstream Issues related list" : "entity's Downstream Issues related list";
@@ -1150,17 +1150,17 @@ export class InherentAssessmentAgent {
 
       const factorGuidanceUrl = `/now/nav/open/table/sn_risk_advanced_factor?sys_id=${factor.factorSysId || factor.sysId}`;
 
-      // Build comprehensive "WHAT WAS SEARCHED" with clean table labels, record metrics, guidance URL, and full URLs
+      // Build comprehensive "WHAT WAS INVESTIGATED" with clean table labels, record metrics, guidance URL, and full URLs
       const whatSearchedLines: string[] = [
-        `  1. Factor Guidance Rubric — consulted attached guidance rubric for "${factor.factorName}"`,
-        `  2. ${entitySearchLabel} issues — searched the ${searchTableLabel}; found ${issueCount} unresolved issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
-        `  3. Relevant issues — ${issueRelevanceLine}`
+        `  1. Factor Guidance Rubric — investigated attached guidance rubric for "${factor.factorName}"`,
+        `  2. ${entitySearchLabel} issues — investigated the ${searchTableLabel}; found ${issueCount} unresolved issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
+        `  3. Risk-Related issues — ${issueRelevanceLine}`
       ];
 
       const auditSearchLines = [
-        `&nbsp;&nbsp;1. Factor Guidance Rubric — consulted <a href="${factorGuidanceUrl}" target="_blank">Factor Guidance (${htmlEscape(factor.factorName)})</a> stored in <code>sn_risk_advanced_factor</code>`,
-        `&nbsp;&nbsp;2. ${entitySearchLabel} issues — searched <a href="/now/nav/open/table/sn_grc_m2m_issue_to_entity" target="_blank">Entity Downstream Issues</a> and <a href="/now/nav/open/table/sn_grc_issue" target="_blank">GRC Issues</a>; found ${issueCount} unresolved issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
-        `&nbsp;&nbsp;3. Relevant issues — ${htmlEscape(issueRelevanceLine)}`
+        `&nbsp;&nbsp;1. Factor Guidance Rubric — investigated <a href="${factorGuidanceUrl}" target="_blank">Factor Guidance (${htmlEscape(factor.factorName)})</a> stored in <code>sn_risk_advanced_factor</code>`,
+        `&nbsp;&nbsp;2. ${entitySearchLabel} issues — investigated <a href="/now/nav/open/table/sn_grc_m2m_issue_to_entity" target="_blank">Entity Downstream Issues</a> and <a href="/now/nav/open/table/sn_grc_issue" target="_blank">GRC Issues</a>; found ${issueCount} unresolved issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
+        `&nbsp;&nbsp;3. Risk-Related issues — ${htmlEscape(issueRelevanceLine)}`
       ];
 
       if (draft.toolCallLog && draft.toolCallLog.length > 0) {
@@ -1170,12 +1170,9 @@ export class InherentAssessmentAgent {
             const fin = draft.evidenceData?.financial;
             const eventCount = fin?.events?.length || 0;
             const totalLoss = fin?.totalExpectedLoss || 0;
-            const linkDetail = fin?.isDirectLink
-              ? `(directly linked to this risk)`
-              : `(0 directly linked records; discovered via unlinked table analysis)`;
-            const lossText = totalLoss > 0 ? `found ${eventCount} relevant risk event(s) with $${totalLoss.toLocaleString()} total expected loss ${linkDetail}` : `found 0 relevant financial loss events`;
-            whatSearchedLines.push(`  ${searchNumber}. Financial Risk Events — searched ${this.getTableLabel('sn_risk_advanced_event')}; ${lossText}`);
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. ${this.getTableLabel('sn_risk_advanced_event')} — searched <a href="/now/nav/open/table/sn_risk_advanced_event" target="_blank">${this.getTableLabel('sn_risk_advanced_event')}</a>; ${htmlEscape(lossText)}`);
+            const lossText = totalLoss > 0 ? `found ${eventCount} relevant risk event(s) directly linked to this risk with $${totalLoss.toLocaleString()} total expected loss` : `found 0 directly linked financial loss events`;
+            whatSearchedLines.push(`  ${searchNumber}. Financial Risk Events — investigated ${this.getTableLabel('sn_risk_advanced_event')} (directly linked); ${lossText}`);
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. ${this.getTableLabel('sn_risk_advanced_event')} — investigated <a href="/now/nav/open/table/sn_risk_advanced_event" target="_blank">${this.getTableLabel('sn_risk_advanced_event')}</a> (directly linked); ${htmlEscape(lossText)}`);
             searchNumber++;
           }
           if (toolCall.name === 'get_regulatory_evidence') {
@@ -1183,20 +1180,17 @@ export class InherentAssessmentAgent {
             const examCount = reg?.exams?.total || 0;
             const findingCount = (reg?.issues?.formalFindings || 0) + (reg?.issues?.enforcementActions || 0);
             const obsCount = reg?.issues?.informalObservations || 0;
-            const linkDetail = reg?.isDirectLink
-              ? `(directly linked to this risk and discovered compliance exams)`
-              : `(0 directly linked records; discovered via unlinked table analysis)`;
             const secSource = reg?.sources?.find((s: any) => s.name === 'SEC EDGAR');
             const secSummary = secSource?.description || 'searched 8-K filings — 0 formal regulatory disclosures found';
             const secUrl = secSource?.url || `https://www.sec.gov/edgar/search/#/q=${riskQuery}&forms=8-K`;
 
-            whatSearchedLines.push(`  ${searchNumber}. Regulatory Evidence — searched ${this.getTableLabel('sn_compliance_exam')} and ${this.getTableLabel('sn_grc_issue')} ${linkDetail}; found ${examCount} exam(s), ${findingCount} formal finding(s)/order(s), and ${obsCount} informal observation(s)`);
+            whatSearchedLines.push(`  ${searchNumber}. Regulatory Evidence — investigated ${this.getTableLabel('sn_compliance_exam')} and ${this.getTableLabel('sn_grc_issue')} (directly linked); found ${examCount} exam(s), ${findingCount} formal finding(s)/order(s), and ${obsCount} informal observation(s)`);
             whatSearchedLines.push(`  ${searchNumber + 1}. Regulatory Sources & URLs Impacting Rating:`);
             whatSearchedLines.push(`     • SEC EDGAR: ${secUrl} = ${secSummary}`);
             whatSearchedLines.push(`     • Federal Reserve: https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search = searched enforcement actions database`);
             whatSearchedLines.push(`     • OCC: https://apps.occ.gov/EASearch = searched enforcement actions database`);
 
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Regulatory evidence — searched <a href="/now/nav/open/table/sn_compliance_exam" target="_blank">${this.getTableLabel('sn_compliance_exam')}</a> and <a href="/now/nav/open/table/sn_grc_issue" target="_blank">${this.getTableLabel('sn_grc_issue')}</a> ${htmlEscape(linkDetail)} (${examCount} exams, ${findingCount} formal findings)`);
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Regulatory evidence — investigated <a href="/now/nav/open/table/sn_compliance_exam" target="_blank">${this.getTableLabel('sn_compliance_exam')}</a> and <a href="/now/nav/open/table/sn_grc_issue" target="_blank">${this.getTableLabel('sn_grc_issue')}</a> (directly linked) (${examCount} exams, ${findingCount} formal findings)`);
             auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Regulatory URLs — <a href="${secUrl}" target="_blank">SEC EDGAR (${htmlEscape(secSummary)})</a> | <a href="https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search" target="_blank">Federal Reserve (Enforcement Database)</a> | <a href="https://apps.occ.gov/EASearch" target="_blank">OCC (Enforcement Database)</a>`);
             searchNumber += 2;
           }
@@ -1204,31 +1198,25 @@ export class InherentAssessmentAgent {
             const cust = draft.evidenceData?.customer;
             const incidentCount = cust?.recordCount || 0;
             const affected = cust?.affectedCustomers || 0;
-            const linkDetail = cust?.isDirectLink
-              ? `(directly linked to this risk/CI)`
-              : `(0 directly linked incidents; discovered via unlinked table analysis)`;
-            whatSearchedLines.push(`  ${searchNumber}. Customer Impact — searched ${this.getTableLabel('incident')} ${linkDetail}; found ${incidentCount} incident(s) with ${affected.toLocaleString()} affected customer record(s)`);
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Customer impact — searched <a href="/now/nav/open/table/incident" target="_blank">${this.getTableLabel('incident')}</a> ${htmlEscape(linkDetail)} (${incidentCount} incidents, ${affected} affected customers)`);
+            whatSearchedLines.push(`  ${searchNumber}. Customer Impact — investigated ${this.getTableLabel('incident')} (directly linked); found ${incidentCount} incident(s) with ${affected.toLocaleString()} affected customer record(s)`);
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Customer impact — investigated <a href="/now/nav/open/table/incident" target="_blank">${this.getTableLabel('incident')}</a> (directly linked) (${incidentCount} incidents, ${affected} affected customers)`);
             searchNumber++;
           }
           if (toolCall.name === 'get_reputational_evidence') {
             const rep = draft.evidenceData?.reputational;
             const eventCount = rep?.internalEvents?.total || 0;
             const mentions = rep?.internalEvents?.totalMentions || 0;
-            const linkDetail = rep?.isDirectLink
-              ? `(directly linked to this risk)`
-              : `(0 directly linked records; discovered via unlinked table analysis)`;
             const gNews = rep?.internetResults?.find((r: any) => r.name === 'Google News');
             const gNewsSummary = gNews?.description || (gNews?.title ? `found live article: "${gNews.title}"` : `searched news articles`);
             const gNewsUrl = gNews?.url || `https://news.google.com/search?q=${riskQuery}`;
 
-            whatSearchedLines.push(`  ${searchNumber}. Reputational Evidence — searched ${this.getTableLabel('sn_compliance_external_event')} ${linkDetail}; found ${eventCount} event(s) with ${mentions.toLocaleString()} media mention(s)`);
+            whatSearchedLines.push(`  ${searchNumber}. Reputational Evidence — investigated ${this.getTableLabel('sn_compliance_external_event')} (directly linked); found ${eventCount} event(s) with ${mentions.toLocaleString()} media mention(s)`);
             whatSearchedLines.push(`  ${searchNumber + 1}. Internet Sources & Articles Impacting Rating:`);
             whatSearchedLines.push(`     • Google News: ${gNewsUrl} = ${gNewsSummary}`);
             whatSearchedLines.push(`     • Reddit: https://www.reddit.com/search/?q=${riskQuery}&sort=new = community discussion search`);
             whatSearchedLines.push(`     • Bing News: https://www.bing.com/news/search?q=${riskQuery} = media aggregation search`);
 
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Reputational events — searched <a href="/now/nav/open/table/sn_compliance_external_event" target="_blank">${this.getTableLabel('sn_compliance_external_event')}</a> ${htmlEscape(linkDetail)} (${eventCount} events, ${mentions} mentions)`);
+            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Reputational events — investigated <a href="/now/nav/open/table/sn_compliance_external_event" target="_blank">${this.getTableLabel('sn_compliance_external_event')}</a> (directly linked) (${eventCount} events, ${mentions} mentions)`);
             auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Internet Search URLs — <a href="${gNewsUrl}" target="_blank">Google News (${htmlEscape(gNewsSummary)})</a> | <a href="https://www.reddit.com/search/?q=${riskQuery}&sort=new" target="_blank">Reddit (Discussions)</a> | <a href="https://www.bing.com/news/search?q=${riskQuery}" target="_blank">Bing News (Media Aggregation)</a>`);
             searchNumber += 2;
           }
@@ -1241,7 +1229,7 @@ export class InherentAssessmentAgent {
         `Rating: ${draft.rating}`,
         `Confidence: ${confidence}`,
         '',
-        'WHAT WAS SEARCHED:',
+        'WHAT WAS INVESTIGATED:',
         ...whatSearchedLines,
         '',
         'CONCLUSION & RATIONALE:',
@@ -1254,7 +1242,7 @@ export class InherentAssessmentAgent {
         `🔍 EMA INVESTIGATION (TECHNICAL / AUDIT TRAIL) — Inherent Risk Factor Assessment`,
         `${htmlLabel('Rating:')} ${draft.rating}<br>${htmlLabel('Confidence:')} ${confidence}`,
         htmlEscape(toolsUsedLine),
-        htmlLabel('WHAT WAS SEARCHED (table-level detail & URLs):'),
+        htmlLabel('WHAT WAS INVESTIGATED (table-level detail & URLs):'),
         auditSearchLines.join('<br>'),
         `${htmlLabel('CONCLUSION & RATIONALE:')}<br>${htmlEscape(draft.justification)}`,
         `<i>Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}</i>`
@@ -1678,14 +1666,11 @@ export class InherentAssessmentAgent {
   // ── Financial Risk Data Source ──────────────────────────────────────────
   private async getFinancialEvidence(riskSysId: string, riskName: string, riskDescription: string): Promise<any> {
     try {
-      // Prioritize risk-linked records; fallback to all records if none linked
-      const allEvents = await (this.adapter as any).getFinancialRiskEvents?.(riskSysId) || await (this.adapter as any).getAllFinancialRiskEvents?.() || [];
-
-      // LLM semantic filtering for relevance
-      const events = await this.filterBySemanticRelevance(allEvents, `Which financial events relate to risk: ${riskName}? Description: ${riskDescription}`, 'financial_event');
+      // Query directly linked records for this risk
+      const events = await (this.adapter as any).getFinancialRiskEvents?.(riskSysId) || [];
       const totalLoss = events.reduce((sum: number, e: any) => sum + (e.expected_loss || 0), 0);
-      const highestLoss = Math.max(...events.map((e: any) => e.expected_loss || 0), 0);
-      const isDirectLink = events.length > 0 && events.some((e: any) => e.is_direct_link);
+      const highestLoss = events.length > 0 ? Math.max(...events.map((e: any) => e.expected_loss || 0), 0) : 0;
+      const isDirectLink = events.length > 0;
 
       const sources: any[] = [];
       if (events.length > 0) {
@@ -1694,7 +1679,7 @@ export class InherentAssessmentAgent {
           recordCount: events.length,
           url: `/now/nav/open/table/sn_risk_advanced_event?sysparm_query=sys_id=${riskSysId}`,
           found: true,
-          isDirectLink
+          isDirectLink: true
         });
       }
 
@@ -1704,8 +1689,8 @@ export class InherentAssessmentAgent {
         totalExpectedLoss: totalLoss,
         highestSingleLoss: highestLoss,
         isDirectLink,
-        events: events.map((e: any) => ({ name: e.name, loss: e.expected_loss, impact: e.impact, discovered: e.discovered_on, isDirectLink: e.is_direct_link })),
-        summary: events.length > 0 ? `Found ${events.length} ${this.getTableLabel('sn_risk_advanced_event').toLowerCase()} (${isDirectLink ? 'directly linked' : 'discovered via unlinked table analysis'}): $${totalLoss.toLocaleString()} total expected loss` : `No ${this.getTableLabel('sn_risk_advanced_event').toLowerCase()} found`
+        events: events.map((e: any) => ({ name: e.name, loss: e.expected_loss, impact: e.impact, discovered: e.discovered_on, isDirectLink: true })),
+        summary: events.length > 0 ? `Found ${events.length} ${this.getTableLabel('sn_risk_advanced_event').toLowerCase()} (directly linked): $${totalLoss.toLocaleString()} total expected loss` : `No ${this.getTableLabel('sn_risk_advanced_event').toLowerCase()} found directly linked to this risk`
       };
     } catch (e) {
       return { sources: [], error: (e as Error).message, recordCount: 0, summary: 'Error retrieving financial data' };
@@ -1715,14 +1700,12 @@ export class InherentAssessmentAgent {
   // ── Regulatory & Legal Risk Data Source (Internal + Free APIs) ──────────
   private async getRegulatoryEvidence(riskSysId: string, riskName: string, riskDescription: string): Promise<any> {
     try {
-      // Prioritize risk-linked records; fallback to all records if none linked
-      const allExams = await (this.adapter as any).getComplianceExams?.(riskSysId) || await (this.adapter as any).getAllComplianceExams?.() || [];
-      const exams = await this.filterBySemanticRelevance(allExams, `Which exams relate to risk: ${riskName}? ${riskDescription}`, 'compliance_exam');
-
-      // Query issues linked to risk AND issues related to the discovered compliance exams
+      // Query directly linked compliance exams
+      const exams = await (this.adapter as any).getComplianceExams?.(riskSysId) || [];
       const examSysIds = exams.map((e: any) => e.sys_id).filter(Boolean);
-      const allIssues = await (this.adapter as any).getGrcIssues?.(riskSysId, examSysIds) || await (this.adapter as any).getAllGrcIssues?.() || [];
-      const issues = await this.filterBySemanticRelevance(allIssues, `Which issues relate to risk: ${riskName}? ${riskDescription}`, 'grc_issue');
+
+      // Query issues linked directly to risk or to the risk's compliance exams
+      const issues = await (this.adapter as any).getGrcIssues?.(riskSysId, examSysIds) || [];
 
       // Query free public APIs for regulatory context
       const secResults = await this.querySecEdgar(riskName, riskDescription);
@@ -1732,17 +1715,17 @@ export class InherentAssessmentAgent {
       const formalFindings = issues.filter((i: any) => i.severity === 'Formal Finding').length;
       const informalObs = issues.filter((i: any) => i.severity === 'Informal Observation').length;
       const enforcement = issues.filter((i: any) => i.severity === 'Enforcement Action').length;
-      const isDirectLink = (exams.length > 0 && exams.some((e: any) => e.is_direct_link)) || (issues.length > 0 && issues.some((i: any) => i.is_direct_link));
+      const isDirectLink = exams.length > 0 || issues.length > 0;
 
       const sources: any[] = [];
       const examLabel = this.getTableLabel('sn_compliance_exam');
       const issueLabel = this.getTableLabel('sn_grc_issue');
 
       if (exams.length > 0) {
-        sources.push({ name: examLabel, recordCount: exams.length, url: `/now/nav/open/table/sn_compliance_exam?sysparm_query=sysId=${riskSysId}`, isDirectLink: exams.some((e: any) => e.is_direct_link) });
+        sources.push({ name: examLabel, recordCount: exams.length, url: `/now/nav/open/table/sn_compliance_exam?sysparm_query=sysId=${riskSysId}`, isDirectLink: true });
       }
       if (issues.length > 0) {
-        sources.push({ name: issueLabel, recordCount: issues.length, url: `/now/nav/open/table/sn_grc_issue?sysparm_query=sysId=${riskSysId}`, isDirectLink: issues.some((i: any) => i.is_direct_link) });
+        sources.push({ name: issueLabel, recordCount: issues.length, url: `/now/nav/open/table/sn_grc_issue?sysparm_query=sysId=${riskSysId}`, isDirectLink: true });
       }
       if (secResults.length > 0) {
         sources.push(secResults[0]);
@@ -1757,15 +1740,15 @@ export class InherentAssessmentAgent {
       return {
         sources,
         isDirectLink,
-        exams: { total: exams.length, isDirectLink: exams.some((e: any) => e.is_direct_link), records: exams.map((e: any) => ({ name: e.name, date: e.exam_date, regulator: e.regulator_name, isDirectLink: e.is_direct_link })) },
+        exams: { total: exams.length, isDirectLink: exams.length > 0, records: exams.map((e: any) => ({ name: e.name, date: e.exam_date, regulator: e.regulator_name, isDirectLink: true })) },
         issues: {
           formalFindings,
           informalObservations: informalObs,
           enforcementActions: enforcement,
-          isDirectLink: issues.some((i: any) => i.is_direct_link),
-          records: issues.map((i: any) => ({ name: i.name, severity: i.severity, status: i.remediation_status, isDirectLink: i.is_direct_link }))
+          isDirectLink: issues.length > 0,
+          records: issues.map((i: any) => ({ name: i.name, severity: i.severity, status: i.remediation_status, isDirectLink: true }))
         },
-        summary: `Regulatory: ${formalFindings} formal findings, ${informalObs} informal observations, ${enforcement} enforcement actions (${isDirectLink ? 'directly linked' : 'discovered via unlinked table analysis'})${sources.length > 0 ? `. Consulted: ${sources.map(s => s.name).join(', ')}` : ''}`
+        summary: `Regulatory: ${formalFindings} formal findings, ${informalObs} informal observations, ${enforcement} enforcement actions (directly linked)${sources.length > 0 ? `. Consulted: ${sources.map(s => s.name).join(', ')}` : ''}`
       };
     } catch (e) {
       return { sources: [], error: (e as Error).message, summary: 'Error retrieving regulatory data' };
@@ -1775,14 +1758,11 @@ export class InherentAssessmentAgent {
   // ── Customer & Market Conduct Risk Data Source ──────────────────────────
   private async getCustomerEvidence(riskSysId: string, riskName: string, riskDescription: string): Promise<any> {
     try {
-      // Prioritize risk-linked records; fallback to all records if none linked
-      const allIncidents = await (this.adapter as any).getIncidents?.(riskSysId) || await (this.adapter as any).getAllIncidents?.() || [];
-
-      // LLM semantic filtering for relevance
-      const incidents = await this.filterBySemanticRelevance(allIncidents, `Which incidents relate to risk: ${riskName}? ${riskDescription}`, 'incident');
+      // Query directly linked incidents
+      const incidents = await (this.adapter as any).getIncidents?.(riskSysId) || [];
       const affectedCustomers = incidents.reduce((sum: number, i: any) => sum + (i.affected_records || 0), 0);
       const activeIncidents = incidents.filter((i: any) => i.state === 'Active' || i.state === 'Open').length;
-      const isDirectLink = incidents.length > 0 && incidents.some((i: any) => i.is_direct_link);
+      const isDirectLink = incidents.length > 0;
 
       const sources: any[] = [];
       const incidentLabel = this.getTableLabel('incident');
@@ -1793,7 +1773,7 @@ export class InherentAssessmentAgent {
           recordCount: incidents.length,
           url: `/now/nav/open/table/incident?sysparm_query=sysId=${riskSysId}`,
           affectedCustomers,
-          isDirectLink
+          isDirectLink: true
         });
       }
 
@@ -1808,8 +1788,8 @@ export class InherentAssessmentAgent {
           operationalIncidents: incidents.filter((i: any) => i.incident_type === 'Operational Incident').length,
           serviceFailures: incidents.filter((i: any) => i.incident_type === 'Service Failure').length
         },
-        incidents: incidents.map((i: any) => ({ name: i.name, type: i.incident_type, affected: i.affected_records, impact: i.impact, state: i.state, isDirectLink: i.is_direct_link })),
-        summary: incidents.length > 0 ? `Found ${incidents.length} ${incidentLabel.toLowerCase()} (${isDirectLink ? 'directly linked' : 'discovered via unlinked table analysis'}) affecting ${affectedCustomers} customers (${activeIncidents} active)` : `No ${incidentLabel.toLowerCase()} found`
+        incidents: incidents.map((i: any) => ({ name: i.name, type: i.incident_type, affected: i.affected_records, impact: i.impact, state: i.state, isDirectLink: true })),
+        summary: incidents.length > 0 ? `Found ${incidents.length} ${incidentLabel.toLowerCase()} (directly linked) affecting ${affectedCustomers} customers (${activeIncidents} active)` : `No ${incidentLabel.toLowerCase()} found directly linked to this risk`
       };
     } catch (e) {
       return { sources: [], error: (e as Error).message, recordCount: 0, summary: 'Error retrieving customer data' };
@@ -1819,11 +1799,8 @@ export class InherentAssessmentAgent {
   // ── Reputational Risk Data Source (Internal + Free APIs) ─────────────────
   private async getReputationalEvidence(riskSysId: string, riskName: string, riskDescription: string): Promise<any> {
     try {
-      // Prioritize risk-linked records; fallback to all records if none linked
-      const allEvents = await (this.adapter as any).getExternalEvents?.(riskSysId) || await (this.adapter as any).getAllExternalEvents?.() || [];
-
-      // LLM semantic filtering for relevance
-      const events = await this.filterBySemanticRelevance(allEvents, `Which external events relate to risk: ${riskName}? ${riskDescription}`, 'external_event');
+      // Query directly linked external events
+      const events = await (this.adapter as any).getExternalEvents?.(riskSysId) || [];
 
       // Query free public APIs for reputational context
       const newsResults = await this.queryGoogleNews(riskName, riskDescription);
@@ -1832,7 +1809,7 @@ export class InherentAssessmentAgent {
 
       const negativeEvents = events.filter((e: any) => e.sentiment === 'Negative').length;
       const totalMentions = events.reduce((sum: number, e: any) => sum + (e.media_mention_count || 0), 0);
-      const isDirectLink = events.length > 0 && events.some((e: any) => e.is_direct_link);
+      const isDirectLink = events.length > 0;
 
       const sources: any[] = [];
       const eventLabel = this.getTableLabel('sn_compliance_external_event');
@@ -1843,7 +1820,7 @@ export class InherentAssessmentAgent {
           recordCount: events.length,
           url: `/now/nav/open/table/sn_compliance_external_event?sysparm_query=sysId=${riskSysId}`,
           mentions: totalMentions,
-          isDirectLink
+          isDirectLink: true
         });
       }
       if (newsResults.length > 0) {
@@ -1864,10 +1841,10 @@ export class InherentAssessmentAgent {
           negativeCount: negativeEvents,
           totalMentions: totalMentions,
           isDirectLink,
-          records: events.map((e: any) => ({ name: e.name, sentiment: e.sentiment, mentions: e.media_mention_count, scope: e.impact_scope, isDirectLink: e.is_direct_link }))
+          records: events.map((e: any) => ({ name: e.name, sentiment: e.sentiment, mentions: e.media_mention_count, scope: e.impact_scope, isDirectLink: true }))
         },
         internetResults: [...newsResults, ...redditResults, ...bingResults],
-        summary: events.length > 0 ? `Found ${events.length} ${eventLabel.toLowerCase()} (${isDirectLink ? 'directly linked' : 'discovered via unlinked table analysis'}, ${totalMentions} mentions, ${negativeEvents} negative). ${sources.length > 1 ? 'Searched: ' + sources.map(s => s.name).join(', ') : ''}` : `No ${eventLabel.toLowerCase()} found`
+        summary: events.length > 0 ? `Found ${events.length} ${eventLabel.toLowerCase()} (directly linked, ${totalMentions} mentions, ${negativeEvents} negative). ${sources.length > 1 ? 'Searched: ' + sources.map(s => s.name).join(', ') : ''}` : `No ${eventLabel.toLowerCase()} found directly linked to this risk`
       };
     } catch (e) {
       return { sources: [], error: (e as Error).message, recordCount: 0, summary: 'Error retrieving reputational data' };

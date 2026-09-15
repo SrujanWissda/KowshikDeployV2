@@ -357,7 +357,7 @@ export class MarkdownPromptLoader {
       },
       {
         name: 'get_entity_issues',
-        description: `Get unresolved (not Closed Complete) issues logged against this risk's ${entityLabel.toLowerCase()}, with priority.`,
+        description: `Get unresolved (not Closed Complete) issues logged against this risk's ${entityLabel.toLowerCase()}. Only select and consider issues that are directly related to THIS risk.`,
         parameters: { type: 'OBJECT', properties: {} }
       }
     ];
@@ -372,21 +372,21 @@ export class MarkdownPromptLoader {
     if (factorNameLower.includes('regulatory') || factorNameLower.includes('legal')) {
       tools.push({
         name: 'get_regulatory_evidence',
-        description: 'Get regulatory evidence: compliance exams, GRC issues (formal findings, observations), and regulatory internet search results (SEC EDGAR, Federal Reserve, OCC).',
+        description: 'Get regulatory evidence: compliance exams, GRC issues (formal findings, observations), and regulatory internet search results (SEC EDGAR, Federal Reserve, OCC) linked to this risk.',
         parameters: { type: 'OBJECT', properties: {} }
       });
     }
     if (factorNameLower.includes('customer') || factorNameLower.includes('conduct') || factorNameLower.includes('market')) {
       tools.push({
         name: 'get_customer_evidence',
-        description: 'Get customer impact evidence: incidents by type, affected customer count, and active incidents.',
+        description: 'Get customer impact evidence: incidents by type, affected customer count, and active incidents directly linked to this risk.',
         parameters: { type: 'OBJECT', properties: {} }
       });
     }
     if (factorNameLower.includes('reputational') || factorNameLower.includes('reputation')) {
       tools.push({
         name: 'get_reputational_evidence',
-        description: 'Get reputational evidence: external events, media mentions, sentiment analysis, and internet search results (Google News, Reddit, Bing News).',
+        description: 'Get reputational evidence: external events, media mentions, sentiment analysis, and internet search results (Google News, Reddit, Bing News) linked to this risk.',
         parameters: { type: 'OBJECT', properties: {} }
       });
     }
@@ -421,9 +421,8 @@ export class MarkdownPromptLoader {
     const methodology = this.getSkillInstructions('SKILL-02') || [
       '1. Match the risk against the factor\'s own rubric bands (from get_factor_guidance) — cite the specific band',
       '   you matched, not just the factor name in isolation.',
-      `2. Judge issue relevance PER FACTOR, not globally: an unresolved issue on the ${params.entityLabel.toLowerCase()} is`,
-      '   evidence ONLY for the specific dimension it actually relates to.',
-      '3. Where an issue is genuinely relevant, weigh it by priority: Critical or High priority issues are stronger evidence toward a weaker rating than Low priority ones.',
+      `2. Judge issue relevance: From the ${params.entityLabel.toLowerCase()}'s issue list, consider ONLY issues that directly relate to THIS specific risk and to this factor dimension. Do NOT factor in unrelated entity issues.`,
+      '3. Where an issue is genuinely related to this risk, weigh it by priority: Critical or High priority issues are stronger evidence toward a weaker rating than Low priority ones.',
       '4. Be honest about your basis: where no relevant issue exists, your rating is an ESTIMATE from rubric thresholds and domain knowledge.',
       '5. CRITICAL: When submitting your rating, structure your justification with:',
       '   • WHY THIS RATING WAS CHOSEN: Cite the specific rubric band, key drivers with exact numbers.',
