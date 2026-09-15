@@ -276,41 +276,52 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       try {
         const issuesMap = new Map<string, { desc: string; state: string; number?: string; priority?: string; isDirectLink?: boolean }>();
 
-        // 1. Fetch issues linked to the entity via M2M table
+        // Step 1: Query sn_grc_m2m_issue_item join table to discover issues strictly linked to this risk
+        const riskLinkedIssueIds = new Set<string>();
+        if (riskSysId) {
+          const m2mRiskLinks = await this.queryTable<any>('sn_grc_m2m_issue_item', {
+            sysparm_query: `sn_grc_item=${riskSysId}`,
+            sysparm_fields: 'sys_id,sn_grc_issue,sn_grc_item'
+          });
+          for (const link of m2mRiskLinks || []) {
+            const id = getValue(link.sn_grc_issue);
+            if (id) riskLinkedIssueIds.add(id);
+          }
+        }
+
+        // Step 2: Fetch issues linked to the parent entity via sn_grc_m2m_issue_to_entity
         if (profileSysId) {
-          const links = await this.queryTable<any>('sn_grc_m2m_issue_to_entity', {
+          const entityLinks = await this.queryTable<any>('sn_grc_m2m_issue_to_entity', {
             sysparm_query: `entity=${profileSysId}`
           });
-          const issueSysIds = Array.from(new Set(links.map(l => getValue(l.sn_grc_issue)).filter(Boolean)));
-          if (issueSysIds.length > 0) {
-            const results = await this.queryTable<any>('sn_grc_issue', {
-              sysparm_query: `sys_idIN${issueSysIds.join(',')}^state!=3`,
-              sysparm_fields: 'sys_id,short_description,state,number,priority,item,u_risk,parent'
+          const entityIssueIds = Array.from(new Set((entityLinks || []).map(l => getValue(l.sn_grc_issue) || getValue(l.issue)).filter(Boolean)));
+          if (entityIssueIds.length > 0) {
+            const entityIssueRows = await this.queryTable<any>('sn_grc_issue', {
+              sysparm_query: `sys_idIN${entityIssueIds.join(',')}^state!=3`,
+              sysparm_fields: 'sys_id,short_description,state,number,priority'
             });
-            for (const r of results) {
+            for (const r of entityIssueRows || []) {
               const id = getValue(r.sys_id);
-              const itemVal = getValue(r.item);
-              const uRiskVal = getValue(r.u_risk);
-              const parentVal = getValue(r.parent);
-              const isDirect = !!(riskSysId && (itemVal === riskSysId || uRiskVal === riskSysId || parentVal === riskSysId));
-              issuesMap.set(id, {
-                desc: getDisplayValue(r.short_description),
-                state: getDisplayValue(r.state),
-                number: getDisplayValue(r.number),
-                priority: getDisplayValue(r.priority) || 'Not set',
-                isDirectLink: isDirect
-              });
+              if (id) {
+                issuesMap.set(id, {
+                  desc: getDisplayValue(r.short_description),
+                  state: getDisplayValue(r.state),
+                  number: getDisplayValue(r.number),
+                  priority: getDisplayValue(r.priority) || 'Not set',
+                  isDirectLink: riskLinkedIssueIds.has(id)
+                });
+              }
             }
           }
         }
 
-        // 2. Fetch issues directly linked to the risk
-        if (riskSysId) {
-          const directResults = await this.queryTable<any>('sn_grc_issue', {
-            sysparm_query: `item=${riskSysId}^ORu_risk=${riskSysId}^ORparent=${riskSysId}^state!=3`,
-            sysparm_fields: 'sys_id,short_description,state,number,priority,item,u_risk,parent'
+        // Step 3: Ensure any issues in sn_grc_m2m_issue_item for this risk are also added and flagged as direct links
+        if (riskLinkedIssueIds.size > 0) {
+          const directIssueRows = await this.queryTable<any>('sn_grc_issue', {
+            sysparm_query: `sys_idIN${Array.from(riskLinkedIssueIds).join(',')}^state!=3`,
+            sysparm_fields: 'sys_id,short_description,state,number,priority'
           });
-          for (const r of directResults || []) {
+          for (const r of directIssueRows || []) {
             const id = getValue(r.sys_id);
             if (id) {
               issuesMap.set(id, {
@@ -1959,18 +1970,26 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       const results: any[] = [];
       const seenIds = new Set<string>();
 
-      // 1. Direct link to risk via item or u_risk
+      // 1. Direct link to risk via sn_grc_m2m_issue_item join table (the ONLY source of risk-issue linkage)
       if (riskSysId) {
-        const directIssueRows = await this.queryTable<any>('sn_grc_issue', {
-          sysparm_fields: fields,
-          sysparm_query: `item=${riskSysId}^ORu_risk=${riskSysId}^ORDERBYDESCsys_created_on`,
-          sysparm_limit: '100'
+        const m2mRows = await this.queryTable<any>('sn_grc_m2m_issue_item', {
+          sysparm_query: `sn_grc_item=${riskSysId}`,
+          sysparm_fields: 'sys_id,sn_grc_issue,sn_grc_item'
         });
-        for (const r of directIssueRows || []) {
-          const id = getValue(r.sys_id);
-          if (id && !seenIds.has(id)) {
-            seenIds.add(id);
-            results.push(this.mapGrcIssueRow(r, true));
+        const m2mIssueIds = Array.from(new Set((m2mRows || []).map(l => getValue(l.sn_grc_issue)).filter(Boolean)));
+
+        if (m2mIssueIds.length > 0) {
+          const directIssueRows = await this.queryTable<any>('sn_grc_issue', {
+            sysparm_fields: fields,
+            sysparm_query: `sys_idIN${m2mIssueIds.join(',')}^ORDERBYDESCsys_created_on`,
+            sysparm_limit: '100'
+          });
+          for (const r of directIssueRows || []) {
+            const id = getValue(r.sys_id);
+            if (id && !seenIds.has(id)) {
+              seenIds.add(id);
+              results.push(this.mapGrcIssueRow(r, true));
+            }
           }
         }
       }

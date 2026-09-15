@@ -1159,7 +1159,7 @@ export class InherentAssessmentAgent {
       const auditSearchLines = [
         `&nbsp;&nbsp;1. Factor Guidance Rubric — investigated <a href="${factorGuidanceUrl}" target="_blank">Factor Guidance (${htmlEscape(factor.factorName)})</a> stored in <code>sn_risk_advanced_factor</code>`,
         `&nbsp;&nbsp;2. ${entitySearchLabel} issues — investigated <a href="/now/nav/open/table/sn_grc_m2m_issue_to_entity" target="_blank">${entitySearchLabel} Downstream Issues</a>; found ${issueCount} unresolved ${entitySearchLabel.toLowerCase()} issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
-        `&nbsp;&nbsp;3. Risk-Related issues — investigated <a href="/now/nav/open/table/sn_grc_issue?sysparm_query=item=${risk.sysId}^ORu_risk=${risk.sysId}" target="_blank">Risk Issues</a>; ${htmlEscape(riskIssueText)}`
+        `&nbsp;&nbsp;3. Risk-Related issues — investigated <a href="/now/nav/open/table/sn_grc_m2m_issue_item?sysparm_query=sn_grc_item=${risk.sysId}" target="_blank">Risk Issues (M2M)</a>; ${htmlEscape(riskIssueText)}`
       ];
 
       if (draft.toolCallLog && draft.toolCallLog.length > 0) {

@@ -27,7 +27,7 @@ This document defines the canonical specification for all modular, reusable skil
 ## Detailed Skill Specifications
 
 ### SKILL-01: Control Evidence Analysis (`control-evidence-analysis`)
-- **Inputs**: Control record, linked test results (`sn_audit_control_test`), associated issues (`sn_grc_issue`).
+- **Inputs**: Control record, linked test results, associated open issues (resolved via risk-issue M2M join table — mapping risk/control items to open issue records).
 - **Evaluation Rules**:
   1. Operating effectiveness overrides design appropriateness on paper.
   2. A passing test record with recent `resultDate` establishes high confidence.
@@ -56,7 +56,7 @@ This document defines the canonical specification for all modular, reusable skil
 
 ### SKILL-04: LLM Semantic Record Filtering (`semantic-llm-filtering`)
 - **Methodology**:
-  1. Retrieve table records (e.g. `incident`, `sn_grc_issue`).
+  1. Retrieve platform records (e.g. operational incidents, open issue records — issue linkage resolved via risk-issue M2M join table for risks and entity-issue M2M join table for entities, not via direct fields on issue records).
   2. Batch records into compact JSON index blocks: `[{ index: 0, text: "..." }]`.
   3. Prompt LLM to identify relevant indices related to the risk/entity scope.
   4. Filter candidate array using returned index list.
@@ -107,7 +107,7 @@ This document defines the canonical specification for all modular, reusable skil
 
 ### SKILL-10: Schema Introspection & Vector Matching (`schema-vector-discovery`)
 - **Methodology**:
-  - Connect via Salesforce Describe / ServiceNow Dictionary APIs.
+  - Connect via target platform metadata introspection APIs (e.g., describe endpoints, data dictionaries).
   - Generate text embeddings for discovered tables/fields and compare via cosine similarity against Agnostic Concept Catalog.
   - Apply write heuristics for score, justification, and fingerprint field detection.
   - Verify non-empty data via sample record checks.
@@ -126,7 +126,7 @@ This document defines the canonical specification for all modular, reusable skil
 - **Formatting Guidelines**:
   - Section headers: Bold with brand color (`#1a3d7c`).
   - Outcomes: Positive markers (`✓`, `#1a7f52`) vs Negative/Rejected markers (`✗`, `#b23a2e`).
-  - Target tables: `u_rationale_auditing_purpose`, `u_ema_audit_trail`, `u_issue_summarize_ema`.
+  - Target fields: Rationale / Audit Trail Field, Telemetry Log Field, Executive Summary Field.
 
 ---
 

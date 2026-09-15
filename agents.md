@@ -50,6 +50,7 @@ The schema outright rejects direct relationships between these pairs:
 - **Entity Tagging**: Every `process`, `risk`, `control`, and `product` belongs to an `ENTITY`. Each entity is tagged to at least one `business_unit` and/or `legal_entity` (`FEM-C-014`).
 - **Assessment Unit**: Risk is scored at the `ASSESSMENT UNIT` (`FEM-C-013`), which comprises 1..N `business_unit(s)` (`FEM-C-015`). Risk scores are never stored as flat isolated fields without an assessment unit context.
 - **Identifier Conventions**: `ENT-`, `ASU-`, `PRD-`, `PRC-`, `RSK-`, `CTL-`, `REG-`, `OBL-`, `POL-`, `REL-`.
+- **M2M Relationship Tables**: Risk-to-issue linkage is modeled exclusively via a **many-to-many (M2M) join table** — there are no direct reference fields on the issue record pointing to risks. Entity-to-issue linkage uses a separate M2M join table mapping entities/profiles to issues. Agents must resolve issue relationships through these join tables, never by assuming direct foreign-key fields on issue records.
 
 ---
 
@@ -57,14 +58,14 @@ The schema outright rejects direct relationships between these pairs:
 
 | Agent Name | Primary Responsibility | Input Contract | Target Writeback / Output | Mapped Skills (`skills.md`) | FEM Alignment |
 |------------|------------------------|----------------|---------------------------|-----------------------------|---------------|
-| **`ControlEffectivenessAgent`** | Evaluates operating effectiveness of controls against linked risks | `instanceSysId: string` | `sn_risk_advanced_risk_assessment_instance_response`, `u_rationale_auditing_purpose`, `additional_comments` | `SKILL-01`, `SKILL-05`, `SKILL-06`, `SKILL-12` | Evaluates `CTL-` mitigating `RSK-` |
-| **`InherentAssessmentAgent`** | Multi-factor inherent risk scoring (Financial, Regulatory, Customer Conduct, Reputational) | `instanceSysId: string` | `sn_risk_advanced_risk_assessment_instance_response`, `u_rationale_auditing_purpose`, `inherent_justification` | `SKILL-02`, `SKILL-03`, `SKILL-04`, `SKILL-05`, `SKILL-06`, `SKILL-12` | Evaluates `RSK-` in `ASU-` |
-| **`RiskControlMappingAgent`** | Semantic gap analysis & automated control recommendation | `riskSysId: string`, `candidateControlSysIds?: string[]` | `m2m_risk_control`, `u_ai_recommendation` | `SKILL-07`, `SKILL-05`, `SKILL-12` | Validates `RSK- -> CTL-` (PRC chain) |
-| **`IssueIdentificationAgent`** | GRC issue clustering, root cause extraction, and repeat finding discovery | `riskSysId: string` or `profileSysId: string` | `sn_grc_issue`, `u_issue_summarize_ema` | `SKILL-04`, `SKILL-07`, `SKILL-12` | Links findings to `CTL-` & `RSK-` |
-| **`AuthorityDocumentCitationAgent`** | FEM-RD-01 to FEM-RD-10 regulatory decomposition & single-duty obligation extraction | `authorityDocumentSysId: string` or `rawText: string` | `sn_compliance_citation`, `sn_compliance_policy_statement` | `SKILL-08`, `SKILL-05`, `SKILL-12` | `REG- -> OBL-` decomposition |
-| **`CitationRiskMappingAgent`** | FEM-OC-01 to FEM-OC-03 citation-to-risk matching, gap identification, and draft risk generation | `citationSysId: string` | `sn_risk_risk`, `m2m_citation_risk` | `SKILL-09`, `SKILL-07`, `SKILL-12` | `OBL- --raises--> RSK-` bridge |
+| **`ControlEffectivenessAgent`** | Evaluates operating effectiveness of controls against linked risks | `instanceSysId: string` | Assessment Response Record, Audit Trail Rationale | `SKILL-01`, `SKILL-05`, `SKILL-06`, `SKILL-12` | Evaluates `CTL-` mitigating `RSK-` |
+| **`InherentAssessmentAgent`** | Multi-factor inherent risk scoring (Financial, Regulatory, Customer Conduct, Reputational) | `instanceSysId: string` | Assessment Response Record, Audit Trail Rationale | `SKILL-02`, `SKILL-03`, `SKILL-04`, `SKILL-05`, `SKILL-06`, `SKILL-12` | Evaluates `RSK-` in `ASU-` |
+| **`RiskControlMappingAgent`** | Semantic gap analysis & automated control recommendation | `riskSysId: string`, `candidateControlSysIds?: string[]` | Risk-Control Join Table, AI Recommendation Field | `SKILL-07`, `SKILL-05`, `SKILL-12` | Validates `RSK- -> CTL-` (PRC chain) |
+| **`IssueIdentificationAgent`** | GRC issue clustering, root cause extraction, and repeat finding discovery | `riskSysId: string` or `profileSysId: string` | Issue Register, Executive Issue Summary Field | `SKILL-04`, `SKILL-07`, `SKILL-12` | Links findings to `CTL-` & `RSK-` |
+| **`AuthorityDocumentCitationAgent`** | FEM-RD-01 to FEM-RD-10 regulatory decomposition & single-duty obligation extraction | `authorityDocumentSysId: string` or `rawText: string` | Obligation/Citation Register, Policy Statement Register | `SKILL-08`, `SKILL-05`, `SKILL-12` | `REG- -> OBL-` decomposition |
+| **`CitationRiskMappingAgent`** | FEM-OC-01 to FEM-OC-03 citation-to-risk matching, gap identification, and draft risk generation | `citationSysId: string` | Risk Register, Citation-Risk Join Table | `SKILL-09`, `SKILL-07`, `SKILL-12` | `OBL- --raises--> RSK-` bridge |
 | **`UniversalSchemaDiscoveryAgent`** | 4-stage introspection, cosine vector ranking, and automated adapter configuration | `connectionConfig: ConnectionConfig` | `GeneratedAdapterConfig` JSON file | `SKILL-10`, `SKILL-04` | Discovers & maps FEM entities |
-| **`VerificationAgent`** | Independent dual-model cross-validation with weakest-link & hard-veto rules | `instanceSysId: string` | `u_verification_layer_output` on `u_ema_audit_trail` | `SKILL-11`, `SKILL-01`, `SKILL-12` | Re-verifies `CTL-` & `RSK-` evidence |
+| **`VerificationAgent`** | Independent dual-model cross-validation with weakest-link & hard-veto rules | `instanceSysId: string` | Verification Output Field on Audit Trail Record | `SKILL-11`, `SKILL-01`, `SKILL-12` | Re-verifies `CTL-` & `RSK-` evidence |
 
 ---
 
@@ -90,10 +91,14 @@ The schema outright rejects direct relationships between these pairs:
 ### 2. Inherent Assessment Agent (`InherentAssessmentAgent`)
 - **Mission**: Determine gross risk exposure across four orthogonal dimensions before applying mitigating controls.
 - **Factor Dimensions**:
-  - **Financial**: Direct loss event queries (`sn_risk_advanced_event`), expected loss threshold evaluation.
-  - **Regulatory**: Internal exam results (`sn_compliance_exam`, `sn_grc_issue`) + live external regulatory search (`SKILL-03` SEC EDGAR, Fed, OCC).
+  - **Financial**: Direct loss event queries (loss events dataset), expected loss threshold evaluation.
+  - **Regulatory**: Internal audit/exam findings and open issue records + live external regulatory search (`SKILL-03` SEC EDGAR, Fed, OCC).
   - **Customer Conduct**: Semantic LLM filtering of operational incident data (`SKILL-04`).
-  - **Reputational**: Internal external events (`sn_compliance_external_event`) + news & community sentiment analysis (`SKILL-03` Google News, Reddit, Bing).
+  - **Reputational**: Internal/external loss and event databases + news & community sentiment analysis (`SKILL-03` Google News, Reddit, Bing).
+- **Issue Linkage Resolution**:
+  - Issues linked to entities are queried exclusively via the entity-issue M2M join table.
+  - Issues linked to risks are queried exclusively via the risk-issue M2M join table.
+  - Direct reference fields on issue records pointing to risks are prohibited.
 - **Triangulation Methodology** (`SKILL-02`):
   - Convergence detection (3+ factor agreement).
   - High-water mark rule for severe outliers.
@@ -117,7 +122,7 @@ The schema outright rejects direct relationships between these pairs:
 ### 4. Issue Identification Agent (`IssueIdentificationAgent`)
 - **Mission**: Mine GRC issues and audit findings to surface repeat failure patterns, overdue remediation, and systemic root causes.
 - **Workflow**:
-  1. Ingest all open and recently closed issues linked to the target entity or risk.
+  1. Ingest all open and recently closed issues linked to the target entity (via entity-issue M2M join) or risk (via risk-issue M2M join).
   2. Cluster issues by underlying root cause (e.g., process deficiency, inadequate staffing, system vulnerability).
   3. Generate executive issue summaries for audit committees.
 
