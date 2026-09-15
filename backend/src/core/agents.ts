@@ -1134,9 +1134,9 @@ export class InherentAssessmentAgent {
         confidence = isSalesforce ? 'Estimated (no issues directly linked to this business unit risk)' : 'Estimated (no issues directly linked to this risk)';
       }
 
-      const issueRelevanceLine = (!draft.relevantIssues || draft.relevantIssues.length === 0)
-        ? `0 issue(s) directly linked to this risk (found ${issueCount} entity downstream issue(s), but none are linked directly to this risk record)`
-        : `${draft.relevantIssues.length} issue(s) directly linked to this risk: ${draft.relevantIssues.join('; ')}${draft.issueNote ? ' — ' + draft.issueNote : ''}`;
+      const riskIssueText = (!draft.relevantIssues || draft.relevantIssues.length === 0)
+        ? `found 0 unresolved issues linked directly to this risk`
+        : `found ${draft.relevantIssues.length} unresolved issue(s) linked directly to this risk: ${draft.relevantIssues.join('; ')}${draft.issueNote ? ' — ' + draft.issueNote : ''}`;
 
       const entitySearchLabel = isSalesforce ? 'Business Unit' : 'Entity';
       const searchTableLabel = isSalesforce ? "Business Unit's Downstream Issues related list" : "entity's Downstream Issues related list";
@@ -1152,14 +1152,14 @@ export class InherentAssessmentAgent {
       // Build comprehensive "WHAT WAS INVESTIGATED" with clean table labels, record metrics, guidance URL, and full URLs
       const whatSearchedLines: string[] = [
         `  1. Factor Guidance Rubric — investigated attached guidance rubric for "${factor.factorName}"`,
-        `  2. ${entitySearchLabel} issues — investigated the ${searchTableLabel}; found ${issueCount} unresolved issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
-        `  3. Risk-Related issues — ${issueRelevanceLine}`
+        `  2. ${entitySearchLabel} issues — investigated the ${searchTableLabel}; found ${issueCount} unresolved ${entitySearchLabel.toLowerCase()} issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
+        `  3. Risk-Related issues — investigated the Risk's Issues related list; ${riskIssueText}`
       ];
 
       const auditSearchLines = [
         `&nbsp;&nbsp;1. Factor Guidance Rubric — investigated <a href="${factorGuidanceUrl}" target="_blank">Factor Guidance (${htmlEscape(factor.factorName)})</a> stored in <code>sn_risk_advanced_factor</code>`,
-        `&nbsp;&nbsp;2. ${entitySearchLabel} issues — investigated <a href="/now/nav/open/table/sn_grc_m2m_issue_to_entity" target="_blank">Entity Downstream Issues</a> and <a href="/now/nav/open/table/sn_grc_issue" target="_blank">GRC Issues</a>; found ${issueCount} unresolved issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
-        `&nbsp;&nbsp;3. Risk-Related issues — ${htmlEscape(issueRelevanceLine)}`
+        `&nbsp;&nbsp;2. ${entitySearchLabel} issues — investigated <a href="/now/nav/open/table/sn_grc_m2m_issue_to_entity" target="_blank">${entitySearchLabel} Downstream Issues</a>; found ${issueCount} unresolved ${entitySearchLabel.toLowerCase()} issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
+        `&nbsp;&nbsp;3. Risk-Related issues — investigated <a href="/now/nav/open/table/sn_grc_issue?sysparm_query=item=${risk.sysId}^ORu_risk=${risk.sysId}" target="_blank">Risk Issues</a>; ${htmlEscape(riskIssueText)}`
       ];
 
       if (draft.toolCallLog && draft.toolCallLog.length > 0) {
