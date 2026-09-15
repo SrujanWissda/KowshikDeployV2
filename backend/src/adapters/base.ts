@@ -15,7 +15,7 @@ export abstract class BaseGRCAdapter {
   abstract getAllRisks(): Promise<Risk[]>;
   async getAllAssessmentInstances(agent?: string): Promise<any[]> { return []; }
   async getAllAuthorityDocuments(): Promise<any[]> { return []; }
-  abstract getEntityIssues(profileSysId: string): Promise<Array<{ desc: string; state: string; number?: string; priority?: string }>>;
+  abstract getEntityIssues(profileSysId: string, riskSysId?: string): Promise<Array<{ desc: string; state: string; number?: string; priority?: string; isDirectLink?: boolean }>>;
   abstract getRisk(riskSysId: string): Promise<Risk | null>;
   abstract getControlsForEntity(profileSysId: string): Promise<Control[]>;
   abstract getAssessmentInstance(instanceSysId: string): Promise<AssessmentInstance | null>;

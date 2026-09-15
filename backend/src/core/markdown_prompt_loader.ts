@@ -393,7 +393,7 @@ export class MarkdownPromptLoader {
 
     tools.push({
       name: 'submit_rating',
-      description: `Finalize your assessment once you have gathered enough evidence. rating must be copied EXACTLY from: ${choiceStr}.`,
+      description: `Finalize your assessment once you have gathered enough evidence. rating must be copied EXACTLY from: ${choiceStr}. relevant_issues must only include issues strictly directly linked to this risk (is_directly_linked_to_this_risk: true). If none are directly linked, set issue_relevant: false and relevant_issues: [].`,
       parameters: {
         type: 'OBJECT',
         properties: {
@@ -421,9 +421,9 @@ export class MarkdownPromptLoader {
     const methodology = this.getSkillInstructions('SKILL-02') || [
       '1. Match the risk against the factor\'s own rubric bands (from get_factor_guidance) — cite the specific band',
       '   you matched, not just the factor name in isolation.',
-      `2. Judge issue relevance: From the ${params.entityLabel.toLowerCase()}'s issue list, consider ONLY issues that directly relate to THIS specific risk and to this factor dimension. Do NOT factor in unrelated entity issues.`,
-      '3. Where an issue is genuinely related to this risk, weigh it by priority: Critical or High priority issues are stronger evidence toward a weaker rating than Low priority ones.',
-      '4. Be honest about your basis: where no relevant issue exists, your rating is an ESTIMATE from rubric thresholds and domain knowledge.',
+      `2. Judge issue relevance: In entity issues, investigate issues from the entity. In 'relevant_issues', consider ONLY issues that are strictly directly linked to THIS risk's own record (is_directly_linked_to_this_risk: true). If issues exist only on the parent entity and are not directly linked to this risk, do NOT include them in relevant_issues, set issue_relevant: false.`,
+      '3. Where an issue is genuinely directly linked to this risk, weigh it by priority: Critical or High priority issues are stronger evidence toward a weaker rating than Low priority ones.',
+      '4. Be honest about your basis: where no directly linked issue exists, your rating is an ESTIMATE from rubric thresholds and domain knowledge.',
       '5. CRITICAL: When submitting your rating, structure your justification with:',
       '   • WHY THIS RATING WAS CHOSEN: Cite the specific rubric band, key drivers with exact numbers.',
       '   • HOW ACCURATE & GROUNDED: State confidence level, table records evaluated.',

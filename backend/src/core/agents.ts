@@ -1038,7 +1038,7 @@ export class InherentAssessmentAgent {
     }
 
     // ── Fresh assessment: entity issue signal, shared context for every factor ──
-    const entityIssues = await this.adapter.getEntityIssues(risk.profileSysId || '');
+    const entityIssues = await this.adapter.getEntityIssues(risk.profileSysId || '', risk.sysId);
     tracer.log('INFO', { entityIssuesCount: entityIssues.length });
 
     for (const factor of factors) {
@@ -1124,20 +1124,19 @@ export class InherentAssessmentAgent {
       const formattedDate = new Date().toISOString().replace('T', ' ').substring(0, 19);
       const issueCount = entityIssues.length;
 
+      const directLinkedIssues = entityIssues.filter(i => (i as any).isDirectLink === true);
+      const directCount = directLinkedIssues.length;
+
       let confidence: string;
-      if (issueCount === 0) {
-        confidence = isSalesforce ? 'Estimated (no business unit issue data available)' : 'Estimated (no entity issue data available)';
-      } else if (draft.issueRelevant) {
-        confidence = isSalesforce ? 'Partly grounded (informed by relevant business unit issue(s))' : 'Partly grounded (informed by relevant entity issue(s))';
+      if (draft.issueRelevant && draft.relevantIssues && draft.relevantIssues.length > 0) {
+        confidence = isSalesforce ? 'Partly grounded (informed by directly linked business unit issue(s))' : 'Partly grounded (informed by directly linked issue(s))';
       } else {
-        confidence = isSalesforce ? 'Estimated (business unit issues found but none relevant to this factor)' : 'Estimated (entity issues found but none relevant to this factor)';
+        confidence = isSalesforce ? 'Estimated (no issues directly linked to this business unit risk)' : 'Estimated (no issues directly linked to this risk)';
       }
 
-      const issueRelevanceLine = issueCount === 0
-        ? (isSalesforce ? 'no issues found on the business unit' : 'no issues found on the entity')
-        : draft.issueRelevant
-          ? `${draft.relevantIssues.length} issue(s) identified as directly related to this risk: ${draft.relevantIssues.join('; ')}${draft.issueNote ? ' — ' + draft.issueNote : ''}`
-          : `none of the ${issueCount} unresolved entity issue(s) were related to this specific risk${draft.issueNote ? ' — ' + draft.issueNote : ''}`;
+      const issueRelevanceLine = (!draft.relevantIssues || draft.relevantIssues.length === 0)
+        ? `0 issue(s) directly linked to this risk (found ${issueCount} entity downstream issue(s), but none are linked directly to this risk record)`
+        : `${draft.relevantIssues.length} issue(s) directly linked to this risk: ${draft.relevantIssues.join('; ')}${draft.issueNote ? ' — ' + draft.issueNote : ''}`;
 
       const entitySearchLabel = isSalesforce ? 'Business Unit' : 'Entity';
       const searchTableLabel = isSalesforce ? "Business Unit's Downstream Issues related list" : "entity's Downstream Issues related list";
@@ -1378,9 +1377,20 @@ export class InherentAssessmentAgent {
           return { name: factor.factorName, description: factor.factorDesc || 'N/A', guidance: factor.guidance || '(no rubric provided — use professional judgment based on the factor name)' };
         case 'get_entity_issues': {
           if (entityIssues.length === 0) return { issues: [], note: `No unresolved issues found on this risk's ${entityLabel.toLowerCase()}.` };
+          const directCount = entityIssues.filter(i => (i as any).isDirectLink === true).length;
           return {
-            issues: entityIssues.map(i => ({ number: i.number || null, desc: i.desc, state: i.state, priority: i.priority || 'Not set' })),
-            count: entityIssues.length
+            issues: entityIssues.map(i => ({
+              number: i.number || null,
+              desc: i.desc,
+              state: i.state,
+              priority: i.priority || 'Not set',
+              is_directly_linked_to_this_risk: (i as any).isDirectLink === true
+            })),
+            total_entity_issues_count: entityIssues.length,
+            directly_linked_to_this_risk_count: directCount,
+            instruction: directCount === 0
+              ? `There are ${entityIssues.length} entity downstream issue(s), but 0 are directly linked to this risk (is_directly_linked_to_this_risk is false for all). You MUST set issue_relevant: false and relevant_issues: [].`
+              : `Only issues where is_directly_linked_to_this_risk is true are directly linked to this risk.`
           };
         }
         case 'get_financial_evidence': {

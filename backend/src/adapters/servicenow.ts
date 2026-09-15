@@ -271,33 +271,68 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
   // 'sn_grc_issue' (named after the table it references, not simply 'issue'). Querying
   // sn_grc_issue directly by a `profile=` field (the prior implementation) assumed a
   // direct reference that doesn't reflect how this relationship is actually modeled.
-  async getEntityIssues(profileSysId: string): Promise<Array<{ desc: string; state: string; number?: string; priority?: string }>> {
+  async getEntityIssues(profileSysId: string, riskSysId?: string): Promise<Array<{ desc: string; state: string; number?: string; priority?: string; isDirectLink?: boolean }>> {
     if (this.useLive) {
       try {
-        const links = await this.queryTable<any>('sn_grc_m2m_issue_to_entity', {
-          sysparm_query: `entity=${profileSysId}`
-        });
-        const issueSysIds = Array.from(new Set(links.map(l => getValue(l.sn_grc_issue)).filter(Boolean)));
-        if (issueSysIds.length === 0) return [];
+        const issuesMap = new Map<string, { desc: string; state: string; number?: string; priority?: string; isDirectLink?: boolean }>();
 
-        const results = await this.queryTable<any>('sn_grc_issue', {
-          sysparm_query: `sys_idIN${issueSysIds.join(',')}^state!=3`,
-          sysparm_fields: 'sys_id,short_description,state,number,priority'
-        });
-        return results.map(r => ({
-          desc: getDisplayValue(r.short_description),
-          state: getDisplayValue(r.state),
-          number: getDisplayValue(r.number),
-          priority: getDisplayValue(r.priority) || 'Not set'
-        }));
+        // 1. Fetch issues linked to the entity via M2M table
+        if (profileSysId) {
+          const links = await this.queryTable<any>('sn_grc_m2m_issue_to_entity', {
+            sysparm_query: `entity=${profileSysId}`
+          });
+          const issueSysIds = Array.from(new Set(links.map(l => getValue(l.sn_grc_issue)).filter(Boolean)));
+          if (issueSysIds.length > 0) {
+            const results = await this.queryTable<any>('sn_grc_issue', {
+              sysparm_query: `sys_idIN${issueSysIds.join(',')}^state!=3`,
+              sysparm_fields: 'sys_id,short_description,state,number,priority,item,u_risk,parent'
+            });
+            for (const r of results) {
+              const id = getValue(r.sys_id);
+              const itemVal = getValue(r.item);
+              const uRiskVal = getValue(r.u_risk);
+              const parentVal = getValue(r.parent);
+              const isDirect = !!(riskSysId && (itemVal === riskSysId || uRiskVal === riskSysId || parentVal === riskSysId));
+              issuesMap.set(id, {
+                desc: getDisplayValue(r.short_description),
+                state: getDisplayValue(r.state),
+                number: getDisplayValue(r.number),
+                priority: getDisplayValue(r.priority) || 'Not set',
+                isDirectLink: isDirect
+              });
+            }
+          }
+        }
+
+        // 2. Fetch issues directly linked to the risk
+        if (riskSysId) {
+          const directResults = await this.queryTable<any>('sn_grc_issue', {
+            sysparm_query: `item=${riskSysId}^ORu_risk=${riskSysId}^ORparent=${riskSysId}^state!=3`,
+            sysparm_fields: 'sys_id,short_description,state,number,priority,item,u_risk,parent'
+          });
+          for (const r of directResults || []) {
+            const id = getValue(r.sys_id);
+            if (id) {
+              issuesMap.set(id, {
+                desc: getDisplayValue(r.short_description),
+                state: getDisplayValue(r.state),
+                number: getDisplayValue(r.number),
+                priority: getDisplayValue(r.priority) || 'Not set',
+                isDirectLink: true
+              });
+            }
+          }
+        }
+
+        return Array.from(issuesMap.values());
       } catch (e: any) {
         console.warn(`[ServiceNowAdapter] Failed to fetch live entity issues: ${e.message}`);
       }
     }
     // Mock fallback issues for ServiceNow
     return [
-      { desc: 'VPC port security leak detected during security scan', state: 'Open', number: 'IPT0020229', priority: 'High' },
-      { desc: 'Missing profiles: GL Accounts', state: 'Open', number: 'IPT0010002', priority: 'Moderate' }
+      { desc: 'VPC port security leak detected during security scan', state: 'Open', number: 'IPT0020229', priority: 'High', isDirectLink: false },
+      { desc: 'Missing profiles: GL Accounts', state: 'Open', number: 'IPT0010002', priority: 'Moderate', isDirectLink: false }
     ];
   }
 
