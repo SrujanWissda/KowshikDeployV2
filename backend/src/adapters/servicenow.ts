@@ -112,9 +112,9 @@ const sn_grc_issue = [
 const sn_risk_m2m_risk_control: Array<{ sn_risk_risk: string, sn_compliance_control: string }> = [];
 
 const sn_compliance_authority_document = [
-  { sys_id: 'auth_doc_001', name: 'Basel III Framework', number: 'AD001', type: 'Regulation', description: 'Basel III regulatory framework for banking supervision and capital adequacy.', category: 'Banking' },
-  { sys_id: 'auth_doc_002', name: 'GDPR Compliance', number: 'AD002', type: 'Regulation', description: 'General Data Protection Regulation standards for personal data privacy and governance.', category: 'Privacy' },
-  { sys_id: 'auth_doc_003', name: 'SOX Section 404', number: 'AD003', type: 'Statute', description: 'Sarbanes-Oxley Act Management Assessment of Internal Controls and financial reporting integrity.', category: 'Financial' }
+  { sys_id: 'auth_doc_001', name: 'Basel III Framework', number: 'AD001', type: 'Regulation', description: 'Basel III regulatory framework for banking supervision and capital adequacy.', category: 'Banking', url: 'https://www.bis.org/bcbs/publ/d424.pdf' },
+  { sys_id: 'auth_doc_002', name: 'GDPR Compliance', number: 'AD002', type: 'Regulation', description: 'General Data Protection Regulation standards for personal data privacy and governance.', category: 'Privacy', url: 'https://gdpr-info.eu/' },
+  { sys_id: 'auth_doc_003', name: 'SOX Section 404', number: 'AD003', type: 'Statute', description: 'Sarbanes-Oxley Act Management Assessment of Internal Controls and financial reporting integrity.', category: 'Financial', url: '' }
 ];
 
 const sn_compliance_citation = [
@@ -2130,7 +2130,7 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
         try {
           const results = await this.queryTable<any>(table, {
             sysparm_query: `sys_id=${sysId}`,
-            sysparm_fields: 'sys_id,name,short_description,description,type,number,category'
+            sysparm_fields: 'sys_id,name,short_description,description,type,number,category,url,source_url,u_url,u_source_url'
           });
           if (results && results.length > 0) {
             const record = results[0];
@@ -2141,7 +2141,8 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
               number: getDisplayValue(record.number),
               type: getDisplayValue(record.type),
               description: getDisplayValue(record.description) || getDisplayValue(record.short_description),
-              category: getDisplayValue(record.category)
+              category: getDisplayValue(record.category),
+              url: getValue(record.url) || getValue(record.source_url) || getValue(record.u_url) || getValue(record.u_source_url)
             };
           }
         } catch (error: any) {
@@ -2160,7 +2161,8 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
         number: mock.number,
         type: mock.type,
         description: mock.description,
-        category: mock.category
+        category: mock.category,
+        url: mock.url || ''
       };
     }
     return null;
@@ -2172,7 +2174,7 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       for (const table of candidateTables) {
         try {
           const results = await this.queryTable<any>(table, {
-            sysparm_fields: 'sys_id,name,short_description,description,type,number,category,sys_created_on',
+            sysparm_fields: 'sys_id,name,short_description,description,type,number,category,url,source_url,u_url,u_source_url,sys_created_on',
             sysparm_query: 'ORDERBYDESCsys_created_on'
           });
           if (results && results.length > 0) {
@@ -2184,7 +2186,8 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
               number: getDisplayValue(record.number),
               type: getDisplayValue(record.type),
               description: getDisplayValue(record.description) || getDisplayValue(record.short_description),
-              category: getDisplayValue(record.category)
+              category: getDisplayValue(record.category),
+              url: getValue(record.url) || getValue(record.source_url) || getValue(record.u_url) || getValue(record.u_source_url)
             }));
           }
         } catch (e: any) {
@@ -2201,7 +2204,8 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       number: d.number,
       type: d.type,
       description: d.description,
-      category: d.category
+      category: d.category,
+      url: d.url || ''
     }));
   }
 
@@ -2510,6 +2514,7 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
     description: string;
     version?: string;
     source_payload?: string;
+    url?: string;
   } | null> {
     const doc = await this.getAuthorityDocument(docSysId);
     if (!doc) return null;
@@ -2520,7 +2525,8 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       type: doc.type || 'Regulation',
       description: doc.description || '',
       version: (doc as any).version || (doc as any).u_version || '1.0',
-      source_payload: (doc as any).source_payload || (doc as any).u_source_text || doc.description
+      source_payload: (doc as any).source_payload || (doc as any).u_source_text || doc.description,
+      url: doc.url || (doc as any).source_url || (doc as any).u_url || (doc as any).u_source_url || ''
     };
   }
 

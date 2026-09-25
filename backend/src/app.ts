@@ -44,6 +44,10 @@ import { VerificationAgent } from './core/verification_agent';
 import { instanceRegistry } from './core/instance-registry';
 import { obsService } from './core/instance-observability';
 import { cacheService } from './core/instance-cache';
+import multer from 'multer';
+import { processExcelMapping } from './services/excel_mapping_service';
+
+const upload = multer({ storage: multer.memoryStorage() });
 
 console.log('[DEBUG] Multi-instance services imported successfully');
 console.log(`[DEBUG] Instance Registry initialized with instances: ${instanceRegistry.getValidInstances().join(', ')}`);
@@ -156,14 +160,19 @@ app.get('/api/instances', (req, res) => {
 // ============================================================================
 app.use((req, res, next) => {
   // Extract instanceId from request (body, query, or header)
-  const instanceId = req.body?.instanceId ||
-                     req.query?.instanceId ||
-                     req.get('X-Instance-Id') ||
-                     'default';
+  let instanceId = req.body?.instanceId ||
+                   req.query?.instanceId ||
+                   req.get('X-Instance-Id');
+
+  const validInstances = instanceRegistry.getValidInstances();
+
+  // If no instanceId provided or 'default' requested, fallback to first valid configured instance
+  if (!instanceId || instanceId === 'default') {
+    instanceId = validInstances.length > 0 ? validInstances[0] : 'instance_001';
+  }
 
   // ✅ VALIDATION: Verify instance is configured
-  if (!instanceRegistry.isValidInstance(instanceId)) {
-    const validInstances = instanceRegistry.getValidInstances();
+  if (!instanceRegistry.isValidInstance(instanceId) && validInstances.length > 0) {
     console.warn(
       `[ISOLATION] Access denied: Instance '${instanceId}' not found. ` +
       `Valid instances: ${validInstances.join(', ')}`
@@ -435,6 +444,33 @@ app.post('/api/run-agent', async (req, res) => {
       instanceId, // ✅ Include instance for debugging
       adapterDiagnostics, // ✅ Show live vs mock mode even on errors
       logs
+    });
+  }
+});
+
+// ============================================================================
+// Excel Upload & Bulk Risk-Control Mapping Endpoint
+// ============================================================================
+app.post('/api/map-excel', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'No Excel file provided in request.' });
+    }
+
+    console.log(`[API /api/map-excel] Received file '${req.file.originalname}' (${req.file.size} bytes).`);
+
+    const outputBuffer = await processExcelMapping(req.file.buffer, llmClient);
+
+    const filename = `Mapped_${req.file.originalname.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(outputBuffer);
+  } catch (error: any) {
+    console.error(`[API /api/map-excel] Error mapping Excel file: ${error.message}`, error);
+    return res.status(500).json({
+      success: false,
+      error: `Excel mapping failed: ${error.message}`
     });
   }
 });
@@ -905,6 +941,7 @@ app.use((req, res, next) => {
     '/api/instances': ['GET'],
     '/api/platforms': ['GET'],
     '/api/run-agent': ['POST'],
+    '/api/map-excel': ['POST'],
     '/api/observability/traces': ['GET'],
     '/api/observability/stats': ['GET'],
     '/api/health/integrity-scan': ['GET'],

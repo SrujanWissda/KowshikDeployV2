@@ -43,6 +43,7 @@
     <!-- Navigation Tabs -->
     <nav class="app-tabs">
       <button class="tab-btn active" id="tab-sandbox">Agent Sandbox</button>
+      <button class="tab-btn" id="tab-excel">Excel Bulk Mapper</button>
       <button class="tab-btn" id="tab-onboarding">Schema Onboarding Agent</button>
       <button class="tab-btn" id="tab-observability">Observability</button>
       <button class="tab-btn" id="tab-integrity">Integrity Monitoring</button>
@@ -344,6 +345,43 @@ Columns:
               <p>Using the Schema Discovery Agent, entering raw GRC API properties generates instant translation
                 bindings for new platforms in seconds.</p>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- View: Excel Bulk Mapper -->
+      <section class="tab-content" id="content-excel">
+        <div class="glass-card" style="max-width: 900px; margin: 0 auto; padding: 2rem;">
+          <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem;">
+            <div style="font-size: 2.5rem;">📊</div>
+            <div>
+              <h2 style="font-family: 'Outfit', sans-serif; font-size: 1.6rem; margin: 0; color: var(--text-main, #ffffff);">Excel Bulk Risk-Control Mapper</h2>
+              <p style="color: rgba(255,255,255,0.7); font-size: 0.95rem; margin: 0.25rem 0 0 0;">
+                Upload an Excel file containing <b>Risks</b> and <b>Controls</b> to perform automated semantic gap analysis and download a mapped workbook.
+              </p>
+            </div>
+          </div>
+
+          <div id="excel-drop-zone" style="background: rgba(255,255,255,0.03); border: 2px dashed rgba(255,255,255,0.2); border-radius: 12px; padding: 2.5rem; text-align: center; margin-bottom: 1.5rem; transition: border-color 0.2s, background 0.2s; cursor: pointer;">
+            <div style="font-size: 2.5rem; margin-bottom: 0.5rem; opacity: 0.8;">📁</div>
+            <p style="margin: 0 0 1rem 0; font-size: 1.05rem; color: rgba(255,255,255,0.9);">Drag & drop your Excel file here, or click to browse</p>
+            <input type="file" id="excel-file-input" accept=".xlsx, .xls, .csv" style="display: none;" />
+            <button class="btn btn-secondary" type="button" onclick="document.getElementById('excel-file-input').click()">Browse Excel File</button>
+            <div id="excel-file-name" style="margin-top: 1rem; font-weight: 600; color: #60a5fa; font-size: 0.95rem; display: none;"></div>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;">
+            <div style="font-size: 0.85rem; color: rgba(255,255,255,0.6);">
+              Expected sheets: <b>Risks</b> (Risk ID, Title, Description) & <b>Controls</b> (Control ID, Title, Description)
+            </div>
+            <button class="btn btn-primary" id="btn-upload-excel" type="button" disabled style="min-width: 280px; justify-content: center;">
+              <span class="btn-text">⚡ Process & Download Mapped Excel</span>
+              <div class="spinner hide" id="excel-spinner"></div>
+            </button>
+          </div>
+
+          <div id="excel-status-box" style="margin-top: 1.5rem; padding: 1rem 1.25rem; border-radius: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); display: none;">
+            <div id="excel-status-text" style="font-size: 0.95rem; color: rgba(255,255,255,0.9);"></div>
           </div>
         </div>
       </section>

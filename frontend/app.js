@@ -1019,10 +1019,14 @@ async function runLiveAgent(platform, agent, targetId) {
 
   } else if (agent === 'authority-document-citation' || agent === 'lrr-obligation-mapping' || agent === 'regulatory-decomposition') {
     const details = data.result?.details || {};
+    const todayStr = new Date().toISOString().split('T')[0];
     agnosticTranslation = {
       agentType: 'AuthorityDocumentCitationAgent (FEM-RD-01 to FEM-RD-10)',
       authorityDocumentId: targetId,
       authorityName: details.authorityName || targetId,
+      documentUrl: details.documentUrl || '',
+      suggestedDate: details.suggestedDate || todayStr,
+      urlExtractionStatus: details.urlExtractionStatus || (details.documentUrl ? 'Extracted from document URL' : `No URL present; suggested date set to Today (${todayStr})`),
       scenario: details.scenario || 'manual_maintenance',
       isFirstPassGreenfield: details.isFirstPassGreenfield || false,
       decomposedCount: details.decomposedCount || 0,
@@ -1038,8 +1042,10 @@ async function runLiveAgent(platform, agent, targetId) {
     simulatedPrompt = [
       '[WissdaSense — Regulatory Decomposition Prompt (FEM-RD-01 to FEM-RD-10)]',
       `Authority Document: ${details.authorityName || targetId}`,
+      `Document Source URL: ${details.documentUrl || '[None Present - Suggested Date set to TODAY]'}`,
       `Scenario: ${(details.scenario || 'manual_maintenance').replace(/_/g, ' ').toUpperCase()}`,
-      'RD-01: Accept source in any form (DB record, raw text, structured feed)',
+      'RD-01: Accept source in any form (URL document source, DB record, raw text, structured feed)',
+      'URL Rule: Extract obligations from document URL if present; if no URL present suggest today\'s date for obligations.',
       'RD-02: Decompose to single-duty obligations (1 enforceable duty per record)',
       'RD-03: Preserve source hierarchy (Part > Section > Subsection > Paragraph)',
       'RD-04: Classify non-obligation text (definitions, recitals, scope statements)',
@@ -1410,9 +1416,12 @@ async function runLocalAgentSimulation(platform, agent, targetId) {
       'Determine inherent score bands based on industry guides.'
     ].join('\n');
   } else if (agent === 'authority-document-citation' || agent === 'lrr-obligation-mapping') {
+    const todayStr = new Date().toISOString().split('T')[0];
     mockPrompt = [
       'You are WissdaSense GRC LRR Obligations Agent.',
       `Authority Document: ${targetId}`,
+      'Check URL Field: If document source URL is present, extract all obligations directly from that document URL.',
+      `If URL field is empty/null, suggest today's date (${todayStr}) for all extracted obligations.`,
       'Query all obligations from sn_compliance_citation table.',
       'Match using semantic analysis of document requirements.',
       'For matched obligations: map or recommend with priority analysis.',
@@ -1654,3 +1663,114 @@ function simulateSchemaMapping(text) {
     ]
   };
 }
+
+// ============================================================================
+// Excel Upload & Processing Event Listeners
+// ============================================================================
+document.addEventListener('DOMContentLoaded', () => {
+  const fileInput = document.getElementById('excel-file-input');
+  const dropZone = document.getElementById('excel-drop-zone');
+  const fileNameDisplay = document.getElementById('excel-file-name');
+  const uploadBtn = document.getElementById('btn-upload-excel');
+  const spinner = document.getElementById('excel-spinner');
+  const statusBox = document.getElementById('excel-status-box');
+  const statusText = document.getElementById('excel-status-text');
+
+  if (!fileInput || !uploadBtn) return;
+
+  function updateSelectedFile(file) {
+    if (file) {
+      fileNameDisplay.innerText = `📄 Selected: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+      fileNameDisplay.style.display = 'block';
+      uploadBtn.disabled = false;
+    } else {
+      fileNameDisplay.innerText = '';
+      fileNameDisplay.style.display = 'none';
+      uploadBtn.disabled = true;
+    }
+  }
+
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    updateSelectedFile(file);
+  });
+
+  if (dropZone) {
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.style.borderColor = '#60a5fa';
+        dropZone.style.background = 'rgba(96, 165, 250, 0.08)';
+      }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.style.borderColor = 'rgba(255,255,255,0.2)';
+        dropZone.style.background = 'rgba(255,255,255,0.03)';
+      }, false);
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+      const dt = e.dataTransfer;
+      const files = dt.files;
+      if (files && files.length > 0) {
+        fileInput.files = files;
+        updateSelectedFile(files[0]);
+      }
+    });
+  }
+
+  uploadBtn.addEventListener('click', async () => {
+    if (!fileInput.files || fileInput.files.length === 0) return;
+
+    const file = fileInput.files[0];
+    const formData = new FormData();
+    formData.append('file', file);
+
+    uploadBtn.disabled = true;
+    spinner.classList.remove('hide');
+    statusBox.style.display = 'block';
+    statusText.style.color = 'rgba(255,255,255,0.9)';
+    statusText.innerHTML = '⏳ Uploading Excel file and executing <b>RiskControlMappingAgent</b> AI gap analysis...';
+
+    try {
+      const targetUrl = currentInstanceId ? withInstanceId(`${API_BASE}/map-excel`) : `${API_BASE}/map-excel`;
+      const response = await fetch(targetUrl, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        let errData;
+        try { errData = await response.json(); } catch (_) {}
+        throw new Error(errData?.error || `Upload failed with status HTTP ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+
+      const outputFileName = `Mapped_${file.name.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = outputFileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(downloadUrl);
+
+      statusText.style.color = '#4ade80';
+      statusText.innerHTML = `✅ <b>Success!</b> Mapped workbook <b>${outputFileName}</b> generated and downloaded.`;
+    } catch (err) {
+      console.error('[ExcelUpload] Error:', err);
+      statusText.style.color = '#f87171';
+      statusText.innerHTML = `❌ <b>Error:</b> ${err.message}`;
+    } finally {
+      spinner.classList.add('hide');
+      uploadBtn.disabled = false;
+    }
+  });
+});

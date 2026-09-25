@@ -1063,8 +1063,8 @@ export class SalesforceAdapter extends BaseGRCAdapter {
   // --------------------------------------------------------------------------
   async getAllAuthorityDocuments(): Promise<any[]> {
     return [
-      { sys_id: 'sf_auth_doc_901', sysId: 'sf_auth_doc_901', name: 'Cloud Security Standard (NIST SP 800-53)', number: 'NIST-800-53', type: 'Framework', description: 'Security and Privacy Controls for Information Systems and Organizations', category: 'Security' },
-      { sys_id: 'sf_auth_doc_902', sysId: 'sf_auth_doc_902', name: 'PCI-DSS Payment Security Standard', number: 'PCI-DSS-4.0', type: 'Standard', description: 'Payment Card Industry Data Security Standard requirements', category: 'Compliance' }
+      { sys_id: 'sf_auth_doc_901', sysId: 'sf_auth_doc_901', name: 'Cloud Security Standard (NIST SP 800-53)', number: 'NIST-800-53', type: 'Framework', description: 'Security and Privacy Controls for Information Systems and Organizations', category: 'Security', url: 'https://csrc.nist.gov/publications/detail/sp/800-53/rev-5/final' },
+      { sys_id: 'sf_auth_doc_902', sysId: 'sf_auth_doc_902', name: 'PCI-DSS Payment Security Standard', number: 'PCI-DSS-4.0', type: 'Standard', description: 'Payment Card Industry Data Security Standard requirements', category: 'Compliance', url: '' }
     ];
   }
 

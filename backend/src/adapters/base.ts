@@ -111,6 +111,7 @@ export abstract class BaseGRCAdapter {
     description: string;
     version?: string;
     source_payload?: string;
+    url?: string;
   } | null> {
     return null;
   }

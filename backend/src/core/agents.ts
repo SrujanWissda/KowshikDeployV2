@@ -3267,6 +3267,9 @@ export class AuthorityDocumentCitationAgent {
 
   async execute(targetId: string, options?: {
     rawText?: string;
+    url?: string;
+    sourceUrl?: string;
+    documentUrl?: string;
     structuredFeed?: any;
     scenario?: 'feed_reconciliation' | 'manual_maintenance' | 'greenfield_build';
     previousVersionDocSysId?: string;
@@ -3277,6 +3280,9 @@ export class AuthorityDocumentCitationAgent {
       authorityName: string;
       scenario: string;
       isFirstPassGreenfield: boolean;
+      documentUrl: string;
+      suggestedDate: string;
+      urlExtractionStatus: string;
       decomposedCount: number;
       nonDutyCount: number;
       existingMapped: number;
@@ -3293,27 +3299,67 @@ export class AuthorityDocumentCitationAgent {
     const tracer = new AgentTracer();
     tracer.log('START', { targetId, options });
 
+    const todayDate = new Date().toISOString().split('T')[0];
+
     // 1. FEM-RD-01: Ingest source text from DB record, raw text, or structured feed
     let authorityName = 'Uploaded / Pasted Document';
     let authorityRef = '';
     let authorityType = 'Regulation / Standard';
     let sourceContent = options?.rawText || '';
     let docSysId = targetId;
+    let documentUrl = options?.url || options?.sourceUrl || options?.documentUrl || '';
 
+    let docDetails: any = null;
     if (options?.structuredFeed) {
       sourceContent = typeof options.structuredFeed === 'string' ? options.structuredFeed : JSON.stringify(options.structuredFeed, null, 2);
       authorityName = options.structuredFeed.title || options.structuredFeed.name || 'Structured Regulatory Feed';
       authorityRef = options.structuredFeed.reference || options.structuredFeed.feed_id || '';
-    } else if (!sourceContent) {
-      const docDetails = await (this.adapter as any).getAuthorityDocumentDetails?.(targetId) ||
+      if (!documentUrl && options.structuredFeed.url) {
+        documentUrl = options.structuredFeed.url;
+      }
+    } else {
+      docDetails = await (this.adapter as any).getAuthorityDocumentDetails?.(targetId) ||
                          await (this.adapter as any).getAuthorityDocument?.(targetId);
       if (docDetails) {
         authorityName = docDetails.name || 'Authority Document';
         authorityRef = docDetails.number || docDetails.reference || '';
         authorityType = docDetails.type || 'Regulation';
-        sourceContent = docDetails.source_payload || docDetails.description || '';
+        if (!sourceContent) {
+          sourceContent = docDetails.source_payload || docDetails.description || '';
+        }
         docSysId = docDetails.sys_id || targetId;
+        if (!documentUrl) {
+          documentUrl = docDetails.url || docDetails.source_url || docDetails.u_url || docDetails.u_source_url || '';
+        }
       }
+    }
+
+    // Check if there is a document source in the url field
+    let extractedFromUrl = false;
+    let urlExtractionStatus = '';
+    if (documentUrl && documentUrl.trim().length > 0) {
+      tracer.log('INFO', { message: `Document source URL detected: ${documentUrl}` });
+      if ((documentUrl.startsWith('http://') || documentUrl.startsWith('https://')) && (!sourceContent || sourceContent.length < 100)) {
+        try {
+          const response = await axios.get(documentUrl, { timeout: 5000 });
+          if (response.data && typeof response.data === 'string' && response.data.trim().length > 0) {
+            sourceContent = response.data;
+            extractedFromUrl = true;
+            urlExtractionStatus = `Successfully fetched and extracted document text from URL (${documentUrl})`;
+          } else if (typeof response.data === 'object') {
+            sourceContent = JSON.stringify(response.data, null, 2);
+            extractedFromUrl = true;
+            urlExtractionStatus = `Successfully fetched structured JSON document from URL (${documentUrl})`;
+          }
+        } catch (fetchErr: any) {
+          tracer.log('WARN', { message: `Could not fetch content directly from URL ${documentUrl}: ${fetchErr.message}. Will extract using URL metadata reference.` });
+          urlExtractionStatus = `Document URL provided (${documentUrl}) - extracting obligations based on document URL source reference.`;
+        }
+      } else {
+        urlExtractionStatus = `Document URL source present (${documentUrl}) - extracting obligations from document source.`;
+      }
+    } else {
+      urlExtractionStatus = `No URL field present in document source. Suggested date set to TODAY (${todayDate}).`;
     }
 
     if (!sourceContent || sourceContent.trim().length === 0) {
@@ -3349,6 +3395,9 @@ export class AuthorityDocumentCitationAgent {
       authorityName,
       scenario,
       isFirstPassGreenfield,
+      documentUrl,
+      todayDate,
+      urlExtractionStatus,
       sourceLength: sourceContent.length,
       existingObligationsCount: existingObligations.length,
       hasPreviousVersion: !!previousVersion
@@ -3366,6 +3415,7 @@ SOURCE AUTHORITY DOCUMENT:
 Name: ${authorityName}
 Reference: ${authorityRef}
 Type: ${authorityType}
+URL Field / Document Source: ${documentUrl ? documentUrl : `[NONE PRESENT - Suggested Date: ${todayDate}]`}
 Content:
 ${sourceContent}
 
@@ -3387,7 +3437,8 @@ CRITICAL RULES:
 3. FEM-RD-04 (Classify Non-Obligation Text): Extract definitions, scope statements, recitals, and commentary into 'classified_non_obligations' with a clear exclusion reason. Do NOT silently drop them.
 4. FEM-RD-05 (Duplicate Detection): Compare against existing library. If a duty matches an existing record, set duplicate_status="exact_duplicate" and provide linked_existing_sys_id. If conceptually similar, mark "near_duplicate". Otherwise "unique".
 5. FEM-RD-06 (Delta on Change): If prior version is provided, classify change_type as "added", "amended", "withdrawn", or "unchanged" with change_rationale.
-6. FEM-RD-07 (Applicability Proposal): Propose 'in_scope' or 'out_of_scope' for the firm with compliance reasoning for reviewer determination.`;
+6. FEM-RD-07 (Applicability Proposal): Propose 'in_scope' or 'out_of_scope' for the firm with compliance reasoning for reviewer determination.
+7. URL & SUGGESTED DATE RULE: ${documentUrl ? `Document source URL is present (${documentUrl}). Extract all obligations from this document source and set document_url="${documentUrl}".` : `No URL present in document source. Set suggested_date="${todayDate}" (suggested as today) for each obligation.`}`;
 
     const schema = {
       type: 'OBJECT',
@@ -3488,6 +3539,9 @@ CRITICAL RULES:
           authorityName,
           scenario,
           isFirstPassGreenfield,
+          documentUrl,
+          suggestedDate: todayDate,
+          urlExtractionStatus,
           decomposedCount: 0,
           nonDutyCount: 0,
           existingMapped: 0,
@@ -3526,6 +3580,7 @@ CRITICAL RULES:
     const narrativeLines: string[] = [
       `${htmlLabel('REGULATORY DECOMPOSITION & OBLIGATION MAPPING SUMMARY (FEM-RD-01 to FEM-RD-10):')}`,
       `Evaluated authority document "${htmlEscape(authorityName)}"${authorityRef ? ` (${htmlEscape(authorityRef)})` : ''}.`,
+      `<strong>Document URL Source:</strong> ${documentUrl ? `<a href="${htmlEscape(documentUrl)}" target="_blank">${htmlEscape(documentUrl)}</a>` : `<span style="color:#d97706; font-weight:600;">None Present — Suggested Date set to TODAY (${todayDate})</span>`}`,
       `<strong>Scenario:</strong> ${htmlEscape(scenario.replace('_', ' ').toUpperCase())} | <strong>Single-Duty Obligations:</strong> ${decomposed.length} | <strong>Non-Duty Items Classified:</strong> ${nonDuties.length} | <strong>Linked Existing:</strong> ${existingMappedCount} | <strong>Proposed New:</strong> ${newCreatedCount}.`,
       ''
     ];
@@ -3556,6 +3611,7 @@ CRITICAL RULES:
           return `• <strong>${htmlEscape(o.proposed_name)}</strong>${dupTag} — ${appTag}<br>` +
                  `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Citation Hierarchy:</strong> <code>${htmlEscape(o.citation_reference)}</code><br>` +
                  `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Atomic Duty:</strong> <em>${htmlEscape(o.duty)}</em><br>` +
+                 `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Suggested Date / Source:</strong> ${o.document_url || documentUrl ? htmlEscape(o.document_url || documentUrl) : `<span style="color:#d97706;">Suggested as Today (${todayDate})</span>`}<br>` +
                  `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Applicability Rationale:</strong> ${htmlEscape(o.applicability_rationale)}` +
                  (o.change_rationale ? `<br>&nbsp;&nbsp;&nbsp;&nbsp;<strong>Change Note:</strong> ${htmlEscape(o.change_rationale)}` : '');
         }).join('<br><br>')
@@ -3618,6 +3674,9 @@ CRITICAL RULES:
           outcome: 'decomposed',
           results: {
             scenario,
+            documentUrl,
+            suggestedDate: todayDate,
+            urlExtractionStatus,
             decomposedCount: decomposed.length,
             nonDutyCount: nonDuties.length,
             existingMapped: existingMappedCount,
@@ -3637,6 +3696,9 @@ CRITICAL RULES:
         authorityName,
         scenario,
         isFirstPassGreenfield,
+        documentUrl,
+        suggestedDate: todayDate,
+        urlExtractionStatus,
         decomposedCount: decomposed.length,
         nonDutyCount: nonDuties.length,
         existingMapped: existingMappedCount,
