@@ -1828,15 +1828,26 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
 
   /** Locates the u_ema_audit_trail row a producer agent's run just created, so the
    * verification agent knows which row's u_verification_layer_output to fill in. */
-  async findLatestAuditTrailRow(agentName: string, riskAssessmentNumber: string): Promise<string | null> {
+  async findLatestAuditTrailRow(agentName: string, targetId: string): Promise<string | null> {
     if (!this.useLive) return null;
     try {
-      const rows = await this.queryTable<any>('u_ema_audit_trail', {
-        sysparm_query: `u_name=${agentName}^u_risk_assessment_number=${riskAssessmentNumber}^ORDERBYDESCsys_created_on`,
-        sysparm_fields: 'sys_id',
-        sysparm_limit: '1'
-      });
-      return rows.length > 0 ? getValue(rows[0].sys_id) : null;
+      const candidates = [
+        `u_name=${agentName}^u_risk_assessment_number=${targetId}^ORDERBYDESCsys_created_on`,
+        `u_name=${agentName}^u_risk=${targetId}^ORDERBYDESCsys_created_on`,
+        `u_name=${agentName}^u_authority_document=${targetId}^ORDERBYDESCsys_created_on`,
+        `u_name=${agentName}^u_citation=${targetId}^ORDERBYDESCsys_created_on`,
+        `u_name=${agentName}^ORDERBYDESCsys_created_on`
+      ];
+
+      for (const query of candidates) {
+        const rows = await this.queryTable<any>('u_ema_audit_trail', {
+          sysparm_query: query,
+          sysparm_fields: 'sys_id',
+          sysparm_limit: '1'
+        });
+        if (rows.length > 0) return getValue(rows[0].sys_id);
+      }
+      return null;
     } catch (e: any) {
       console.warn(`[Verification Layer] Failed to locate audit trail row: ${e.message}`);
       return null;
@@ -2518,6 +2529,30 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
   } | null> {
     const doc = await this.getAuthorityDocument(docSysId);
     if (!doc) return null;
+    let sourceContent = (doc as any).source_payload || (doc as any).u_source_text || doc.description || '';
+
+    if (this.useLive) {
+      try {
+        const citations = await this.queryTable<any>('sn_compliance_citation', {
+          sysparm_query: `document=${docSysId}`,
+          sysparm_fields: 'sys_id,name,short_description,description,reference,type'
+        });
+        if (citations && citations.length > 0) {
+          const concatenated = citations.map((c: any) => {
+            const ref = getDisplayValue(c.reference) || getDisplayValue(c.name) || 'Citation';
+            const desc = getDisplayValue(c.description) || getDisplayValue(c.short_description) || '';
+            return `[${ref}] ${desc}`;
+          }).filter(Boolean).join('\n\n');
+
+          if (concatenated.trim().length > sourceContent.trim().length) {
+            sourceContent = concatenated;
+          }
+        }
+      } catch (e: any) {
+        console.warn(`[ServiceNowAdapter] Querying child citations for doc ${docSysId} failed: ${e.message}`);
+      }
+    }
+
     return {
       sys_id: doc.sys_id || doc.sysId || docSysId,
       name: doc.name || 'Unnamed Authority Document',
@@ -2525,7 +2560,7 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       type: doc.type || 'Regulation',
       description: doc.description || '',
       version: (doc as any).version || (doc as any).u_version || '1.0',
-      source_payload: (doc as any).source_payload || (doc as any).u_source_text || doc.description,
+      source_payload: sourceContent,
       url: doc.url || (doc as any).source_url || (doc as any).u_url || (doc as any).u_source_url || ''
     };
   }

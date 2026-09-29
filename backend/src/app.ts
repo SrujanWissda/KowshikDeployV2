@@ -25,7 +25,7 @@ import { ServiceNowAdapter } from './adapters/servicenow';
 import { SalesforceAdapter } from './adapters/salesforce';
 import { DynamicAdapter } from './adapters/dynamic_adapter';
 import { SalesforceDescribeConnector } from './adapters/connectors/salesforce_describe';
-import { GeminiLLMClient, GroqLLMClient } from './llm/llm_client';
+import { GeminiLLMClient, GroqLLMClient, DeepInfraLLMClient } from './llm/llm_client';
 import { GeminiEmbeddingsClient } from './llm/embeddings_client';
 import { VectorStore } from './core/vector_store';
 import { UniversalSchemaDiscoveryAgent } from './core/universal_schema_discovery_agent';
@@ -204,6 +204,7 @@ const llmClient = new GeminiLLMClient();
 // verification layer, deliberately never by any producer agent, so the
 // checker can never share the producer's blind spots.
 const groqClient = new GroqLLMClient();
+const deepInfraClient = new DeepInfraLLMClient();
 const embeddingsClient = new GeminiEmbeddingsClient();
 const vectorStore = new VectorStore();
 const universalDiscoveryAgent = new UniversalSchemaDiscoveryAgent(llmClient, embeddingsClient, vectorStore);
@@ -397,15 +398,15 @@ app.post('/api/run-agent', async (req, res) => {
       logs
     });
 
-    // ── Verification layer (pilot: Control Effectiveness only) ──────────────
+    // ── Verification layer — runs automatically after EVERY agent run ────────
     // Fired AFTER the response is sent, not awaited — this must never add
     // latency to the producer agent's response or affect it in any way.
     // Independent of and unrelated to the producer's own success/failure;
     // errors here are logged and swallowed, never surfaced to the caller.
-    if (agent === 'control-effectiveness' && groqClient.isLive()) {
-      new VerificationAgent(adapter, groqClient).verifyControlEffectiveness(targetId)
-        .then(v => console.log(`[VerificationAgent] Instance '${instanceId}' ${v.success ? 'OK' : 'skipped'}: ${v.message}`))
-        .catch(e => console.warn(`[VerificationAgent] Instance '${instanceId}' Failed: ${e.message}`));
+    if (deepInfraClient.isLive()) {
+      new VerificationAgent(adapter, deepInfraClient).verifyAgentRun(agent, targetId, req.body.options || req.body)
+        .then(v => console.log(`[VerificationAgent] Instance '${instanceId}' [${agent}] ${v.success ? 'OK' : 'skipped'}: ${v.message}`))
+        .catch(e => console.warn(`[VerificationAgent] Instance '${instanceId}' [${agent}] Failed: ${e.message}`));
     }
   } catch (error: any) {
     console.log = originalLog;

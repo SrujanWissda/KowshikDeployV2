@@ -3339,17 +3339,40 @@ export class AuthorityDocumentCitationAgent {
     let urlExtractionStatus = '';
     if (documentUrl && documentUrl.trim().length > 0) {
       tracer.log('INFO', { message: `Document source URL detected: ${documentUrl}` });
-      if ((documentUrl.startsWith('http://') || documentUrl.startsWith('https://')) && (!sourceContent || sourceContent.length < 100)) {
+      const isServiceNowUiUrl = documentUrl.includes('.service-now.com/') && documentUrl.includes('/record/');
+      if (!isServiceNowUiUrl && (documentUrl.startsWith('http://') || documentUrl.startsWith('https://')) && (!sourceContent || sourceContent.length < 200)) {
         try {
-          const response = await axios.get(documentUrl, { timeout: 5000 });
-          if (response.data && typeof response.data === 'string' && response.data.trim().length > 0) {
-            sourceContent = response.data;
+          let fetchedText = '';
+          // 1. Direct HTTP GET
+          try {
+            const response = await axios.get(documentUrl, { timeout: 5000, headers: { 'User-Agent': 'Mozilla/5.0' } });
+            if (response.data && typeof response.data === 'string' && response.data.trim().length > 100) {
+              fetchedText = response.data;
+            } else if (typeof response.data === 'object') {
+              fetchedText = JSON.stringify(response.data, null, 2);
+            }
+          } catch (_) {}
+
+          // 2. Jina AI Reader fallback (renders JS SPA pages to clean markdown)
+          if (!fetchedText || fetchedText.length < 200) {
+            try {
+              const jinaUrl = `https://r.jina.ai/${documentUrl}`;
+              const jinaRes = await axios.get(jinaUrl, { timeout: 8000, headers: { 'Accept': 'text/plain' } });
+              if (jinaRes.data && typeof jinaRes.data === 'string' && jinaRes.data.trim().length > 100) {
+                fetchedText = jinaRes.data;
+                urlExtractionStatus = `Successfully fetched and converted web content via Jina Reader from URL (${documentUrl})`;
+              }
+            } catch (_) {}
+          }
+
+          if (fetchedText && fetchedText.length > 100) {
+            sourceContent = fetchedText;
             extractedFromUrl = true;
-            urlExtractionStatus = `Successfully fetched and extracted document text from URL (${documentUrl})`;
-          } else if (typeof response.data === 'object') {
-            sourceContent = JSON.stringify(response.data, null, 2);
-            extractedFromUrl = true;
-            urlExtractionStatus = `Successfully fetched structured JSON document from URL (${documentUrl})`;
+            if (!urlExtractionStatus) {
+              urlExtractionStatus = `Successfully fetched and extracted document text from URL (${documentUrl})`;
+            }
+          } else {
+            urlExtractionStatus = `Document URL provided (${documentUrl}) - URL requires login, paywall, or authentication. Ingesting record metadata.`;
           }
         } catch (fetchErr: any) {
           tracer.log('WARN', { message: `Could not fetch content directly from URL ${documentUrl}: ${fetchErr.message}. Will extract using URL metadata reference.` });

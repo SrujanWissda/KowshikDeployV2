@@ -1,5 +1,6 @@
 import axios from 'axios';
 import * as dotenv from 'dotenv';
+import OpenAI from 'openai';
 import { recordSpan } from '../core/observability';
 
 dotenv.config();
@@ -557,3 +558,152 @@ export class GroqLLMClient extends BaseLLMClient {
     return null;
   }
 }
+
+// ============================================================================
+// DeepInfra / GLM-4.7 LLM Client — used by the verification agent (verification_agent.ts).
+// Uses OpenAI SDK configured for DeepInfra endpoint and zai-org/GLM-4.7 model.
+// ============================================================================
+export class DeepInfraLLMClient extends BaseLLMClient {
+  private openai: OpenAI;
+  private apiKey: string | undefined;
+  private model: string;
+
+  constructor() {
+    super();
+    this.apiKey = process.env.DEEPINFRA_API_KEY;
+    this.model = process.env.DEEPINFRA_MODEL || 'zai-org/GLM-4.7';
+    this.openai = new OpenAI({
+      baseURL: 'https://api.deepinfra.com/v1/openai',
+      apiKey: this.apiKey || 'dummy_key',
+    });
+  }
+
+  isLive(): boolean {
+    return !!this.apiKey;
+  }
+
+  async generateStructuredOutput<T>(prompt: string, systemInstruction: string, schema: any): Promise<T> {
+    const t0 = Date.now();
+    if (!this.apiKey) {
+      throw new Error('[DeepInfraLLMClient] No DEEPINFRA_API_KEY configured — verification agent cannot run.');
+    }
+
+    for (let attempt = 0; attempt <= 1; attempt++) {
+      try {
+        const completion = await this.openai.chat.completions.create({
+          model: this.model,
+          messages: [
+            { role: 'system', content: `${systemInstruction}\nYou MUST respond with a valid JSON object strictly matching this schema: ${JSON.stringify(schema)}` },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0.1,
+          response_format: { type: 'json_object' }
+        });
+
+        const text = completion.choices[0]?.message?.content;
+        if (!text) throw new Error('Empty response content from DeepInfra API');
+
+        const cleaned = text.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
+        const parsed = JSON.parse(cleaned) as T;
+
+        recordSpan('llm.deepinfra_generate', t0, 'ok', {
+          model: this.model,
+          promptChars: prompt.length,
+          responseChars: text.length,
+          totalTokens: completion.usage?.total_tokens,
+          systemInstruction: capText(systemInstruction),
+          prompt: capText(prompt),
+          response: capText(text)
+        });
+        return parsed;
+      } catch (error: any) {
+        const status = error?.status || error?.response?.status;
+        const message = error?.message || '';
+        if (status === 429 && attempt === 0) {
+          const match = message.match(/try again in ([\d.]+)s/i);
+          const waitMs = match ? Math.ceil(parseFloat(match[1]) * 1000) + 250 : 4000;
+          console.warn(`[DeepInfraLLMClient] Rate limited, retrying in ${waitMs}ms`);
+          await new Promise(resolve => setTimeout(resolve, waitMs));
+          continue;
+        }
+        const detail = error?.message || String(error);
+        recordSpan('llm.deepinfra_generate', t0, 'error', { model: this.model, reason: detail, promptChars: prompt.length });
+        throw new Error(`[DeepInfraLLMClient] Request failed: ${detail}`);
+      }
+    }
+    throw new Error('[DeepInfraLLMClient] Unreachable');
+  }
+
+  async runToolLoop<T>(
+    systemInstruction: string,
+    initialPrompt: string,
+    tools: ToolDeclaration[],
+    finalAnswerTool: string,
+    executeTool: (name: string, args: any) => Promise<any>,
+    maxTurns: number = 6
+  ): Promise<ToolLoopResult<T> | null> {
+    const t0 = Date.now();
+    if (!this.apiKey) {
+      recordSpan('llm.deepinfra_tool_loop', t0, 'fallback', { model: this.model, reason: 'no-api-key' });
+      return null;
+    }
+
+    const messages: any[] = [
+      { role: 'system', content: systemInstruction },
+      { role: 'user', content: initialPrompt }
+    ];
+    const toolCallLog: Array<{ name: string; args: any }> = [];
+    const functionTools = tools.map(t => ({
+      type: 'function' as const,
+      function: { name: t.name, description: t.description, parameters: t.parameters }
+    }));
+
+    for (let turn = 1; turn <= maxTurns; turn++) {
+      let completion: any;
+      try {
+        completion = await this.openai.chat.completions.create({
+          model: this.model,
+          messages,
+          tools: functionTools,
+          tool_choice: 'auto',
+          temperature: 0.1
+        });
+      } catch (error: any) {
+        const detail = error?.message || String(error);
+        recordSpan('llm.deepinfra_tool_loop', t0, 'error', { model: this.model, turn, reason: detail });
+        return null;
+      }
+
+      const message = completion?.choices?.[0]?.message;
+      const calls = message?.tool_calls || [];
+
+      if (calls.length === 0) {
+        messages.push({ role: 'user', content: `Use one of the available tools to continue investigating, or call ${finalAnswerTool} once you have enough evidence to finalize.` });
+        continue;
+      }
+
+      const finalCall = calls.find((c: any) => c.function?.name === finalAnswerTool);
+      if (finalCall) {
+        const args = JSON.parse(finalCall.function.arguments || '{}');
+        recordSpan('llm.deepinfra_tool_loop', t0, 'ok', { model: this.model, turns: turn, toolCalls: toolCallLog.map(c => c.name).join(', ') || '(none)' });
+        return { result: args as T, toolCallLog, turns: turn };
+      }
+
+      messages.push(message);
+      for (const call of calls) {
+        toolCallLog.push({ name: call.function.name, args: JSON.parse(call.function.arguments || '{}') });
+        let toolResult: any;
+        try {
+          toolResult = await executeTool(call.function.name, JSON.parse(call.function.arguments || '{}'));
+        } catch (e: any) {
+          toolResult = { error: e.message };
+        }
+        messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(toolResult) });
+      }
+    }
+
+    recordSpan('llm.deepinfra_tool_loop', t0, 'error', { model: this.model, reason: 'max turns exceeded' });
+    return null;
+  }
+}
+

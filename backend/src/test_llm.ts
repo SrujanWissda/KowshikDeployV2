@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
-dotenv.config();
-import { GeminiLLMClient, GroqLLMClient } from './llm/llm_client';
+import path from 'path';
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+import { GeminiLLMClient, GroqLLMClient, DeepInfraLLMClient } from './llm/llm_client';
 
 async function main() {
   console.log('Testing GeminiLLMClient...');
@@ -16,17 +17,17 @@ async function main() {
     console.error('Gemini error:', e.message);
   }
 
-  console.log('\nTesting GroqLLMClient...');
-  const groq = new GroqLLMClient();
+  console.log('\nTesting DeepInfraLLMClient (GLM-4.7)...');
+  const deepInfra = new DeepInfraLLMClient();
   try {
-    const res = await groq.generateStructuredOutput<{ rating: string }>(
+    const res = await deepInfra.generateStructuredOutput<{ rating: string }>(
       'Pick a rating from: High, Medium, Low for financial risk with $10M loss',
       'You are a risk rater',
-      { type: 'OBJECT', properties: { rating: { type: 'STRING' } }, required: ['rating'] }
+      { type: 'object', properties: { rating: { type: 'string' } }, required: ['rating'] }
     );
-    console.log('Groq response:', res);
+    console.log('DeepInfra GLM-4.7 response:', res);
   } catch (e: any) {
-    console.error('Groq error:', e.message);
+    console.error('DeepInfra error:', e.message);
   }
 }
 
