@@ -2233,16 +2233,34 @@ export class ObligationControlObjectiveMappingAgent {
         if (existing) alreadyMappedIds = existing;
       }
       const alreadyMapped = objectives.filter((o: any) => alreadyMappedIds.has(o.sysId));
-      const toEvaluate = objectives.filter((o: any) => !alreadyMappedIds.has(o.sysId));
+      let toEvaluate = objectives.filter((o: any) => !alreadyMappedIds.has(o.sysId));
       tracer.log('INFO', { alreadyMappedCount: alreadyMapped.length, toEvaluateCount: toEvaluate.length });
 
       if (toEvaluate.length === 0) {
         result = this.finishAlreadyMapped(obligation, objectives.length, alreadyMapped);
       } else {
+        const MAX_EVALUATE_OBJECTIVES = 80;
+        let candidateCapNote = '';
+        if (toEvaluate.length > MAX_EVALUATE_OBJECTIVES) {
+          const targetTokens = new Set(
+            `${obligation.name || ''} ${obligation.description || ''} ${obligation.reference || ''}`.toLowerCase().match(/\b\w{3,}\b/g) || []
+          );
+          const scored = toEvaluate.map((o: any) => {
+            const text = `${o.name || ''} ${o.description || ''} ${o.category || ''}`.toLowerCase();
+            let score = 0;
+            targetTokens.forEach(tok => { if (text.includes(tok)) score += 1; });
+            return { obj: o, score };
+          });
+          scored.sort((a: any, b: any) => b.score - a.score);
+          candidateCapNote = `Note: Evaluated top ${MAX_EVALUATE_OBJECTIVES} candidate control objectives (out of ${toEvaluate.length} total live objectives) to ensure response time stays within Vercel serverless execution limits.`;
+          toEvaluate = scored.slice(0, MAX_EVALUATE_OBJECTIVES).map((s: any) => s.obj);
+        }
+
         const draft = toEvaluate.length <= ObligationControlObjectiveMappingAgent.BATCH_SIZE
           ? await withRetry(() => this.mapObjectivesWithTools(obligation, toEvaluate, alreadyMapped, tracer), 2)
-              .then(d => d ? { ...d, coverageNote: '' } : null)
-          : await this.runChunkedWithTools(obligation, toEvaluate, alreadyMapped, tracer);
+              .then(d => d ? { ...d, coverageNote: candidateCapNote } : null)
+          : await this.runChunkedWithTools(obligation, toEvaluate, alreadyMapped, tracer)
+              .then(d => d ? { ...d, coverageNote: d.coverageNote ? `${d.coverageNote} ${candidateCapNote}` : candidateCapNote } : null);
 
         if (!draft) {
           result = { success: false, message: 'AI evaluation failed for all objective batches — please retry.', details: null };
@@ -2938,16 +2956,34 @@ export class RiskControlMappingAgent {
         if (existing) alreadyMappedIds = existing;
       }
       const alreadyMapped = controls.filter(c => alreadyMappedIds.has(c.sysId));
-      const toEvaluate = controls.filter(c => !alreadyMappedIds.has(c.sysId));
+      let toEvaluate = controls.filter(c => !alreadyMappedIds.has(c.sysId));
       tracer.log('INFO', { alreadyMappedCount: alreadyMapped.length, toEvaluateCount: toEvaluate.length });
 
       if (toEvaluate.length === 0) {
         result = this.finishAlreadyMapped(risk, entityLabel, controls.length, alreadyMapped);
       } else {
+        const MAX_EVALUATE_CONTROLS = 80;
+        let candidateCapNote = '';
+        if (toEvaluate.length > MAX_EVALUATE_CONTROLS) {
+          const targetTokens = new Set(
+            `${risk.name || ''} ${risk.description || ''} ${risk.profileName || ''}`.toLowerCase().match(/\b\w{3,}\b/g) || []
+          );
+          const scored = toEvaluate.map((c: any) => {
+            const text = `${c.name || ''} ${c.description || ''} ${c.category || ''}`.toLowerCase();
+            let score = 0;
+            targetTokens.forEach(tok => { if (text.includes(tok)) score += 1; });
+            return { ctrl: c, score };
+          });
+          scored.sort((a: any, b: any) => b.score - a.score);
+          candidateCapNote = `Note: Evaluated top ${MAX_EVALUATE_CONTROLS} candidate controls (out of ${toEvaluate.length} total live controls) to ensure response time stays within Vercel serverless execution limits.`;
+          toEvaluate = scored.slice(0, MAX_EVALUATE_CONTROLS).map((s: any) => s.ctrl);
+        }
+
         const draft = toEvaluate.length <= RiskControlMappingAgent.BATCH_SIZE
           ? await withRetry(() => this.mapControlsWithTools(risk, toEvaluate, alreadyMapped, entityLabel, tracer), 2)
-              .then(d => d ? { ...d, coverageNote: '' } : null)
-          : await this.runChunkedWithTools(risk, toEvaluate, alreadyMapped, entityLabel, tracer);
+              .then(d => d ? { ...d, coverageNote: candidateCapNote } : null)
+          : await this.runChunkedWithTools(risk, toEvaluate, alreadyMapped, entityLabel, tracer)
+              .then(d => d ? { ...d, coverageNote: d.coverageNote ? `${d.coverageNote} ${candidateCapNote}` : candidateCapNote } : null);
 
         if (!draft) {
           result = { success: false, message: 'AI evaluation failed for all control batches — please retry.', details: null };
@@ -4522,7 +4558,23 @@ export class CitationRiskMappingAgent {
     }
 
     // 4. LLM evaluation: rank candidate risks per entity for this obligation
-    const riskSummaries = allRisks.map((r: any, i: number) => {
+    const MAX_EVALUATE_RISKS = 80;
+    let evalRisks = allRisks;
+    if (allRisks.length > MAX_EVALUATE_RISKS) {
+      const targetTokens = new Set(
+        `${citation.name || ''} ${citation.description || ''} ${citation.reference || ''}`.toLowerCase().match(/\b\w{3,}\b/g) || []
+      );
+      const scored = allRisks.map((r: any) => {
+        const text = `${r.name || ''} ${r.description || ''} ${r.profileName || ''}`.toLowerCase();
+        let score = 0;
+        targetTokens.forEach(tok => { if (text.includes(tok)) score += 1; });
+        return { risk: r, score };
+      });
+      scored.sort((a: any, b: any) => b.score - a.score);
+      evalRisks = scored.slice(0, MAX_EVALUATE_RISKS).map((s: any) => s.risk);
+    }
+
+    const riskSummaries = evalRisks.map((r: any, i: number) => {
       const entityName = r.profileName || entities.find((e: any) => e.sysId === r.profileSysId)?.name || 'Unknown';
       const existingCitations = ((r as any).u_citations || (r as any).citations || '').split(',').filter(Boolean).length;
       return `[${i + 1}] Risk: "${r.name}" | Entity: "${entityName}" | Description: ${(r.description || '').substring(0, 200)} | Existing obligation links: ${existingCitations}`;
