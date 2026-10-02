@@ -2233,34 +2233,16 @@ export class ObligationControlObjectiveMappingAgent {
         if (existing) alreadyMappedIds = existing;
       }
       const alreadyMapped = objectives.filter((o: any) => alreadyMappedIds.has(o.sysId));
-      let toEvaluate = objectives.filter((o: any) => !alreadyMappedIds.has(o.sysId));
+      const toEvaluate = objectives.filter((o: any) => !alreadyMappedIds.has(o.sysId));
       tracer.log('INFO', { alreadyMappedCount: alreadyMapped.length, toEvaluateCount: toEvaluate.length });
 
       if (toEvaluate.length === 0) {
         result = this.finishAlreadyMapped(obligation, objectives.length, alreadyMapped);
       } else {
-        const MAX_EVALUATE_OBJECTIVES = 80;
-        let candidateCapNote = '';
-        if (toEvaluate.length > MAX_EVALUATE_OBJECTIVES) {
-          const targetTokens = new Set(
-            `${obligation.name || ''} ${obligation.description || ''} ${obligation.reference || ''}`.toLowerCase().match(/\b\w{3,}\b/g) || []
-          );
-          const scored = toEvaluate.map((o: any) => {
-            const text = `${o.name || ''} ${o.description || ''} ${o.category || ''}`.toLowerCase();
-            let score = 0;
-            targetTokens.forEach(tok => { if (text.includes(tok)) score += 1; });
-            return { obj: o, score };
-          });
-          scored.sort((a: any, b: any) => b.score - a.score);
-          candidateCapNote = `Note: Evaluated top ${MAX_EVALUATE_OBJECTIVES} candidate control objectives (out of ${toEvaluate.length} total live objectives) to ensure response time stays within Vercel serverless execution limits.`;
-          toEvaluate = scored.slice(0, MAX_EVALUATE_OBJECTIVES).map((s: any) => s.obj);
-        }
-
         const draft = toEvaluate.length <= ObligationControlObjectiveMappingAgent.BATCH_SIZE
           ? await withRetry(() => this.mapObjectivesWithTools(obligation, toEvaluate, alreadyMapped, tracer), 2)
-              .then(d => d ? { ...d, coverageNote: candidateCapNote } : null)
-          : await this.runChunkedWithTools(obligation, toEvaluate, alreadyMapped, tracer)
-              .then(d => d ? { ...d, coverageNote: d.coverageNote ? `${d.coverageNote} ${candidateCapNote}` : candidateCapNote } : null);
+              .then(d => d ? { ...d, coverageNote: '' } : null)
+          : await this.runChunkedWithTools(obligation, toEvaluate, alreadyMapped, tracer);
 
         if (!draft) {
           result = { success: false, message: 'AI evaluation failed for all objective batches — please retry.', details: null };
@@ -2482,64 +2464,67 @@ export class ObligationControlObjectiveMappingAgent {
   private async mapObjectivesBatchWithTools(
     obligation: any, chunk: any[], alreadyMapped: any[], chunkIndex: number, chunksTotal: number, tracer: AgentTracer
   ): Promise<{ matches: ResolvedObjective[]; rejected: ResolvedObjective[] } | null> {
-    const { tools, executeTool } = this.buildMappingTools(obligation, chunk);
-
-    tools.push({
-      name: 'submit_mapping',
-      description: 'Finalize your control objective mapping decision for this batch.',
-      parameters: {
-        type: 'OBJECT',
-        properties: {
-          matches: {
-            type: 'ARRAY',
-            items: {
-              type: 'OBJECT',
-              properties: { index: { type: 'INTEGER' }, reason: { type: 'STRING' } },
-              required: ['index', 'reason']
-            }
-          },
-          rejected: {
-            type: 'ARRAY',
-            items: {
-              type: 'OBJECT',
-              properties: { index: { type: 'INTEGER' }, reason: { type: 'STRING' } },
-              required: ['index', 'reason']
-            }
-          }
-        },
-        required: ['matches', 'rejected']
-      }
-    });
-
-    const initialPrompt = [
+    const prompt = [
       this.obligationBlock(obligation),
       this.alreadyMappedBlock(alreadyMapped),
       '',
       `CANDIDATE CONTROL OBJECTIVES — Batch ${chunkIndex} of ${chunksTotal}:`,
       this.objectiveListBlock(chunk),
       '',
-      'Evaluate each objective against this obligation. Call submit_mapping with your matches and rejections for this batch.'
+      'TASK: Evaluate each candidate control objective against the obligation.',
+      'Determine which objectives, if implemented, directly satisfy or contribute to this obligation.',
+      'For MATCHES: provide a clear rationale.',
+      'For REJECTED: explain why it does not satisfy the obligation\'s specific duty.',
+      '',
+      'Respond ONLY with valid JSON, no markdown:',
+      '{"matches": [{"index": 1, "reason": "..."}], "rejected": [{"index": 2, "reason": "..."}]}'
     ].join('\n');
 
-    const systemInstruction = `You are Ema, a GRC Compliance mapping architect reviewing one batch of a larger control objective library against a single obligation. Investigate via tools before you conclude.`;
+    const schema = {
+      type: 'OBJECT',
+      properties: {
+        matches: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: { index: { type: 'INTEGER' }, reason: { type: 'STRING' } },
+            required: ['index', 'reason']
+          }
+        },
+        rejected: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: { index: { type: 'INTEGER' }, reason: { type: 'STRING' } },
+            required: ['index', 'reason']
+          }
+        }
+      },
+      required: ['matches', 'rejected']
+    };
 
-    tracer.log('REQUEST', { path: 'chunked_batch', batchIndex: chunkIndex, prompt_preview: initialPrompt });
+    tracer.log('REQUEST', { path: 'chunked_batch', batchIndex: chunkIndex, prompt_preview: prompt });
 
-    const loop = await this.llm.runToolLoop<{ matches: Array<{ index: number; reason: string }>; rejected: Array<{ index: number; reason: string }> }>(
-      systemInstruction, initialPrompt, tools, 'submit_mapping', executeTool, 6
-    );
+    try {
+      const res = await this.llm.generateStructuredOutput<{
+        matches: Array<{ index: number; reason: string }>;
+        rejected: Array<{ index: number; reason: string }>;
+      }>(
+        prompt,
+        'You are Ema, a GRC Compliance mapping architect reviewing candidate control objectives against an obligation.',
+        schema
+      );
 
-    if (!loop) {
-      tracer.log('ERROR', { path: 'chunked_batch', batchIndex: chunkIndex, error: 'tool loop did not finalize' });
+      tracer.log('RESPONSE', { path: 'chunked_batch', batchIndex: chunkIndex, matchesCount: res.matches?.length || 0, rejectedCount: res.rejected?.length || 0 });
+
+      return {
+        matches: this.resolveAgainst(res.matches, chunk),
+        rejected: [...this.resolveAgainst(res.rejected, chunk), ...this.unmentionedRejections(chunk, res.matches || [], res.rejected || [])]
+      };
+    } catch (e: any) {
+      tracer.log('ERROR', { path: 'chunked_batch', batchIndex: chunkIndex, error: e.message });
       return null;
     }
-
-    tracer.log('RESPONSE', { path: 'chunked_batch', batchIndex: chunkIndex, matchesCount: loop.result.matches?.length || 0, rejectedCount: loop.result.rejected?.length || 0 });
-
-    return {
-      matches: this.resolveAgainst(loop.result.matches, chunk),
-      rejected: [...this.resolveAgainst(loop.result.rejected, chunk), ...this.unmentionedRejections(chunk, loop.result.matches, loop.result.rejected || [])]
-    };
   }
 
   // ── Chunked path ──────────────────────────────────────────────────────────
@@ -2553,7 +2538,7 @@ export class ObligationControlObjectiveMappingAgent {
       indexedChunks.push({ chunk: objectives.slice(i, i + batchSize), index: indexedChunks.length + 1 });
     }
 
-    const batchResults = await runInParallelBatches(indexedChunks, 5, async ({ chunk, index }) =>
+    const batchResults = await runInParallelBatches(indexedChunks, 20, async ({ chunk, index }) =>
       withRetry(() => this.mapObjectivesBatchWithTools(obligation, chunk, alreadyMapped, index, chunksTotal, tracer), 2)
     );
 
@@ -2956,34 +2941,16 @@ export class RiskControlMappingAgent {
         if (existing) alreadyMappedIds = existing;
       }
       const alreadyMapped = controls.filter(c => alreadyMappedIds.has(c.sysId));
-      let toEvaluate = controls.filter(c => !alreadyMappedIds.has(c.sysId));
+      const toEvaluate = controls.filter(c => !alreadyMappedIds.has(c.sysId));
       tracer.log('INFO', { alreadyMappedCount: alreadyMapped.length, toEvaluateCount: toEvaluate.length });
 
       if (toEvaluate.length === 0) {
         result = this.finishAlreadyMapped(risk, entityLabel, controls.length, alreadyMapped);
       } else {
-        const MAX_EVALUATE_CONTROLS = 80;
-        let candidateCapNote = '';
-        if (toEvaluate.length > MAX_EVALUATE_CONTROLS) {
-          const targetTokens = new Set(
-            `${risk.name || ''} ${risk.description || ''} ${risk.profileName || ''}`.toLowerCase().match(/\b\w{3,}\b/g) || []
-          );
-          const scored = toEvaluate.map((c: any) => {
-            const text = `${c.name || ''} ${c.description || ''} ${c.category || ''}`.toLowerCase();
-            let score = 0;
-            targetTokens.forEach(tok => { if (text.includes(tok)) score += 1; });
-            return { ctrl: c, score };
-          });
-          scored.sort((a: any, b: any) => b.score - a.score);
-          candidateCapNote = `Note: Evaluated top ${MAX_EVALUATE_CONTROLS} candidate controls (out of ${toEvaluate.length} total live controls) to ensure response time stays within Vercel serverless execution limits.`;
-          toEvaluate = scored.slice(0, MAX_EVALUATE_CONTROLS).map((s: any) => s.ctrl);
-        }
-
         const draft = toEvaluate.length <= RiskControlMappingAgent.BATCH_SIZE
           ? await withRetry(() => this.mapControlsWithTools(risk, toEvaluate, alreadyMapped, entityLabel, tracer), 2)
-              .then(d => d ? { ...d, coverageNote: candidateCapNote } : null)
-          : await this.runChunkedWithTools(risk, toEvaluate, alreadyMapped, entityLabel, tracer)
-              .then(d => d ? { ...d, coverageNote: d.coverageNote ? `${d.coverageNote} ${candidateCapNote}` : candidateCapNote } : null);
+              .then(d => d ? { ...d, coverageNote: '' } : null)
+          : await this.runChunkedWithTools(risk, toEvaluate, alreadyMapped, entityLabel, tracer);
 
         if (!draft) {
           result = { success: false, message: 'AI evaluation failed for all control batches — please retry.', details: null };
@@ -3232,7 +3199,7 @@ export class RiskControlMappingAgent {
       indexedChunks.push({ chunk: controls.slice(i, i + batchSize), index: indexedChunks.length + 1 });
     }
 
-    const batchResults = await runInParallelBatches(indexedChunks, 5, async ({ chunk, index }) =>
+    const batchResults = await runInParallelBatches(indexedChunks, 20, async ({ chunk, index }) =>
       withRetry(() => this.mapControlsBatchWithTools(risk, chunk, alreadyMapped, entityLabel, index, chunksTotal, tracer), 2)
     );
 
@@ -4558,21 +4525,7 @@ export class CitationRiskMappingAgent {
     }
 
     // 4. LLM evaluation: rank candidate risks per entity for this obligation
-    const MAX_EVALUATE_RISKS = 80;
-    let evalRisks = allRisks;
-    if (allRisks.length > MAX_EVALUATE_RISKS) {
-      const targetTokens = new Set(
-        `${citation.name || ''} ${citation.description || ''} ${citation.reference || ''}`.toLowerCase().match(/\b\w{3,}\b/g) || []
-      );
-      const scored = allRisks.map((r: any) => {
-        const text = `${r.name || ''} ${r.description || ''} ${r.profileName || ''}`.toLowerCase();
-        let score = 0;
-        targetTokens.forEach(tok => { if (text.includes(tok)) score += 1; });
-        return { risk: r, score };
-      });
-      scored.sort((a: any, b: any) => b.score - a.score);
-      evalRisks = scored.slice(0, MAX_EVALUATE_RISKS).map((s: any) => s.risk);
-    }
+    const evalRisks = allRisks;
 
     const riskSummaries = evalRisks.map((r: any, i: number) => {
       const entityName = r.profileName || entities.find((e: any) => e.sysId === r.profileSysId)?.name || 'Unknown';
