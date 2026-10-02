@@ -27,7 +27,9 @@ async function bootstrapInstances() {
       instSel.innerHTML = availableInstances
         .map(i => `<option value="${i.instanceId}">${i.label}${i.isConfigured ? '' : ' (unconfigured)'}</option>`)
         .join('');
-      currentInstanceId = availableInstances[0].instanceId;
+      if (!currentInstanceId || !availableInstances.some(i => i.instanceId === currentInstanceId)) {
+        currentInstanceId = availableInstances[0].instanceId;
+      }
       instSel.value = currentInstanceId;
     } else if (instSel) {
       instSel.innerHTML = '<option disabled>No instances configured on server</option>';
@@ -265,7 +267,8 @@ const agentList = [
   { id: 'inherent-assessment', name: 'Inherent Assessment Agent', desc: 'Assesses inherent factor risk (PII classification, environment) using guidance' },
   { id: 'risk-control-mapping', name: 'Risk-Control Mapping Agent', desc: 'Maps relevant entity control records from compliance library' },
   { id: 'authority-document-citation', name: 'LRR Obligation Mapping Agent', desc: 'Maps authority documents to obligations with semantic matching and priority analysis' },
-  { id: 'citation-risk-mapping', name: 'Citation to Risk Mapping Agent', desc: 'Maps citations/obligations to breachable entity risks with ranked candidate evaluation, gap identification, and over-mapping detection' }
+  { id: 'citation-risk-mapping', name: 'Citation to Risk Mapping Agent', desc: 'Maps citations/obligations to breachable entity risks with ranked candidate evaluation, gap identification, and over-mapping detection' },
+  { id: 'obligation-control-objective-mapping', name: 'Obligation-Control Objective Mapping Agent', desc: 'Maps obligations to control objectives using a multi-pass evaluation and gap analysis loop' }
 ];
 
 function loadDropdownsMock() {
@@ -348,9 +351,9 @@ async function updateTargets() {
           return;
         }
         console.warn(`[updateTargets] No authority documents found on ${platform}, using mock data.`);
-      } else if (agent === 'citation-risk-mapping') {
-        // --- Live citations / obligations (for Citation to Risk Mapping Agent) ---
-        selectTarget.innerHTML = '<option disabled>⏳ Loading live citations/obligations...</option>';
+      } else if (agent === 'citation-risk-mapping' || agent === 'obligation-control-objective-mapping') {
+        // --- Live citations / obligations (for Citation-Risk and Obligation-Control Objective agents) ---
+        selectTarget.innerHTML = '<option disabled>⏳ Loading live obligations/citations...</option>';
         const res = await fetch(withInstanceId(`${API_BASE}/platforms/${platform}/citations`));
         const data = await res.json();
         const cits = data.citations || [];
@@ -365,7 +368,8 @@ async function updateTargets() {
             .join('');
           return;
         }
-        console.warn(`[updateTargets] No citations found on ${platform}, using mock data.`);
+        console.warn(`[updateTargets] No citations/obligations found on ${platform}, using mock data.`);
+
       } else {
         // --- Live assessment instances (for control-effectiveness & inherent-assessment) ---
         selectTarget.innerHTML = '<option disabled>⏳ Loading live assessments...</option>';
@@ -391,7 +395,7 @@ async function updateTargets() {
     filtered = targets.filter(t => t.id.includes('risk'));
   } else if (agent === 'authority-document-citation' || agent === 'lrr-obligation-mapping') {
     filtered = targets.filter(t => t.id.includes('auth') || t.id.includes('doc'));
-  } else if (agent === 'citation-risk-mapping') {
+  } else if (agent === 'citation-risk-mapping' || agent === 'obligation-control-objective-mapping') {
     filtered = targets.filter(t => t.id.includes('obl') || t.id.includes('cit'));
   } else {
     filtered = targets.filter(t => t.id.includes('inst') || t.id.includes('asmt'));
@@ -408,6 +412,7 @@ function setupFormListeners() {
     instSel.addEventListener('change', () => {
       currentInstanceId = instSel.value;
       if (!isStandaloneMode) {
+        document.getElementById('connection-status').innerText = `Server Connected (Live Mode · ${currentInstanceId})`;
         loadDropdownsLive();
         refreshObservability();
         loadIntegrityHistory();
@@ -1086,6 +1091,26 @@ async function runLiveAgent(platform, agent, targetId) {
       'OC-06: Join layer mapping via u_citations'
     ].join('\n');
 
+  } else if (agent === 'obligation-control-objective-mapping') {
+    const liveResult = data.result?.details || data.result || {};
+    agnosticTranslation = {
+      agentType: 'ObligationControlObjectiveMappingAgent',
+      obligationId: targetId,
+      matchedObjectives: liveResult.matches || [],
+      justification: liveResult.justification || '',
+      gaps: liveResult.gaps || '',
+      recommendations: liveResult.recommendations || ''
+    };
+    simulatedPrompt = [
+      '[WissdaSense GRC Mapping Prompt]',
+      `Obligation ID: ${targetId}`,
+      isSF
+        ? 'Objectives retrieved from: Control_Objective__c (live)'
+        : 'Objectives retrieved from: sn_compliance_policy_statement (live)',
+      'Gemini asked to select and rank control objectives that satisfy this obligation',
+      `Objectives matched: ${(liveResult.matches || []).length}`
+    ].join('\n');
+
   } else {
     // risk-control-mapping
     const liveResult = data.result?.details || data.result || {};
@@ -1268,6 +1293,61 @@ async function runLiveAgent(platform, agent, targetId) {
       writebackLines.push(`  ${details.coverageSummary}`);
       writebackLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     }
+  } else if (agent === 'obligation-control-objective-mapping') {
+    // obligation-control-objective-mapping — rich checklist log
+    const d = data.result?.details || {};
+    const matches   = Array.isArray(d.matches)  ? d.matches  : [];
+    const rejected  = Array.isArray(d.rejected) ? d.rejected : [];
+    const total     = d.totalObjectivesEvaluated ?? (matches.length + rejected.length);
+    const obligationName = data.result?.details?.obligationName || targetId;
+
+    writebackLines.push('');
+    writebackLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    writebackLines.push(`  OBLIGATION TO CONTROL OBJECTIVE MAPPING AUDIT LOG`);
+    writebackLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    writebackLines.push(`  Obligation      : ${obligationName}`);
+    writebackLines.push(`  Total Evaluated : ${total} objectives`);
+    writebackLines.push(`  ✅ Selected     : ${matches.length} objectives`);
+    writebackLines.push(`  ❌ Rejected     : ${rejected.length} objectives`);
+    writebackLines.push('');
+
+    if (matches.length > 0) {
+      writebackLines.push(`✅ SELECTED CONTROL OBJECTIVES  (${matches.length}/${total} meet compliance criteria)`);
+      writebackLines.push(`──────────────────────────────────────────────────`);
+      matches.forEach((m, i) => {
+        writebackLines.push(`  [${i + 1}] ${m.name}`);
+        writebackLines.push(`      Category : ${m.category || 'General'}`);
+        writebackLines.push(`      Reason   : ${m.reason}`);
+        writebackLines.push('');
+      });
+    }
+
+    if (rejected.length > 0) {
+      writebackLines.push(`❌ REJECTED CONTROL OBJECTIVES (Grouped by Category)`);
+      writebackLines.push(`──────────────────────────────────────────────────`);
+      const groups = {};
+      rejected.forEach(r => {
+        const cat = r.category || 'General';
+        if (!groups[cat]) groups[cat] = [];
+        groups[cat].push(r);
+      });
+      Object.keys(groups).sort().forEach(cat => {
+        const list = groups[cat];
+        writebackLines.push(`  📁 Category: ${cat} (${list.length} objective${list.length > 1 ? 's' : ''})`);
+        list.forEach(r => {
+          writebackLines.push(`    • Objective: ${r.name}`);
+          writebackLines.push(`      Reason   : ${r.reason}`);
+        });
+        writebackLines.push('');
+      });
+    }
+
+    writebackLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    if (d.justification) writebackLines.push(`  OVERALL JUSTIFICATION`);
+    if (d.justification) writebackLines.push(`  ${d.justification}`);
+    if (d.gaps)          { writebackLines.push(''); writebackLines.push(`  GAPS IDENTIFIED`); writebackLines.push(`  ${d.gaps}`); }
+    if (d.recommendations) { writebackLines.push(''); writebackLines.push(`  RECOMMENDATIONS`); writebackLines.push(`  ${d.recommendations}`); }
+    writebackLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
   } else {
     // risk-control-mapping — rich checklist log
     const d = data.result?.details || {};
@@ -1327,7 +1407,7 @@ async function runLiveAgent(platform, agent, targetId) {
     if (d.recommendations) { writebackLines.push(''); writebackLines.push(`  RECOMMENDATIONS`); writebackLines.push(`  ${d.recommendations}`); }
     writebackLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
   }
-
+  
   updateConsolePane('console-writeback', writebackLines.filter(l => l !== undefined).join('\n'), 'text');
 }
 
@@ -1382,6 +1462,16 @@ async function runLocalAgentSimulation(platform, agent, targetId) {
       reference: sourceRecord.reference || 'Section N/A',
       description: sourceRecord.description,
       document: sourceRecord.document || 'auth_doc_001'
+    };
+  } else if (agent === 'obligation-control-objective-mapping') {
+    agnosticTranslation = {
+      obligationId: targetId,
+      name: sourceRecord.name,
+      description: sourceRecord.description,
+      candidateObjectives: [
+        { name: 'Data Encryption at Rest and in Transit', category: 'Data Protection' },
+        { name: 'Multi-Factor Authentication Enforcement', category: 'Access Control' }
+      ]
     };
   } else {
     agnosticTranslation = {
@@ -1438,6 +1528,13 @@ async function runLocalAgentSimulation(platform, agent, targetId) {
       '5. OC-05: Flag risks with 4+ existing obligation links (over-mapping warning).',
       '6. OC-06: Map at the join layer via u_citations.'
     ].join('\n');
+  } else if (agent === 'obligation-control-objective-mapping') {
+    mockPrompt = [
+      'You are GRC Obligation-Control Objective Mapping Agent.',
+      `Target Obligation: ${agnosticTranslation.name} - ${agnosticTranslation.description}`,
+      `Agnostic Candidates: ${JSON.stringify(agnosticTranslation.candidateObjectives)}`,
+      'Analyze mappings and output valid JSON matrix.'
+    ].join('\n');
   } else {
     mockPrompt = [
       'You are GRC Risk-Control Mapping Agent.',
@@ -1491,7 +1588,15 @@ async function runLocalAgentSimulation(platform, agent, targetId) {
         '  ├─ 📝 [DRAFT] Customer PII Leak via Support Portal → Customer Support Operations',
         '  │    Gap: Support ticketing system lacks dedicated risk for PII in ticket attachments.',
         '  └─ 📝 [DRAFT] Financial Record Exfiltration → Financial Operations & Billing',
-        '[ServiceNow DB UPDATE] Table [sn_compliance_citation] row ' + targetId + ' -> u_ai_recommendation: [HTML summary written]'
+        '[ServiceNow DB UPDATE] Table [sn_compliance_citation] row ' + targetId + ' -> u_ai_recommendations: [HTML summary written]'
+      ];
+    } else if (agent === 'obligation-control-objective-mapping') {
+      logs = [
+        '[ServiceNow DB UPDATE] Querying sn_compliance_policy_statement...',
+        '[ServiceNow DB UPDATE] Created 2 rows in [sn_compliance_m2m_citation_policy_statement] linking to obligation:',
+        '  ├─ Data Encryption at Rest and in Transit (obj_101) - Mapped',
+        '  └─ Multi-Factor Authentication Enforcement (obj_102) - Mapped',
+        '[ServiceNow DB UPDATE] Table [sn_compliance_citation] row ' + targetId + ' -> u_ai_recommendations: [HTML audit trail written]'
       ];
     } else {
       logs = [
@@ -1499,7 +1604,7 @@ async function runLocalAgentSimulation(platform, agent, targetId) {
         '[ServiceNow DB UPDATE] Created 2 rows in [sn_risk_m2m_risk_control] linking to risk_001:',
         '  ├─ Database Password Rotation (ctrl_101) - Mapped',
         '  └─ Multi-Factor Authentication (ctrl_102) - Mapped',
-        '[ServiceNow DB UPDATE] Table [sn_risk_risk] row risk_001 -> u_ai_recommendation: [HTML audit trail written]'
+        '[ServiceNow DB UPDATE] Table [sn_risk_risk] row risk_001 -> u_ai_recommendations: [HTML audit trail written]'
       ];
     }
   } else {
@@ -1530,6 +1635,12 @@ async function runLocalAgentSimulation(platform, agent, targetId) {
         '[Salesforce DB UPDATE] Querying Account and Risk__c records...',
         '[Salesforce DB UPDATE] Mapped sf_obl_501 to sf_risk_901 (Data Leak via S3 Buckets) on Account Cloud Ops & Billing.',
         '[Salesforce DB UPDATE] Created draft risk for gap account in custom GRC schema.'
+      ];
+    } else if (agent === 'obligation-control-objective-mapping') {
+      logs = [
+        '[Salesforce DB UPDATE] Linked Obligation sf_obl_501 to 2 objectives in custom mapping table:',
+        '  ├─ Data Encryption at Rest (sf_obj_801) - Mapped',
+        '  └─ MFA Enforcement (sf_obj_802) - Mapped'
       ];
     } else {
       logs = [

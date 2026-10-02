@@ -36,7 +36,8 @@ import {
   RiskControlMappingAgent,
   IssueIdentificationAgent,
   AuthorityDocumentCitationAgent,
-  CitationRiskMappingAgent
+  CitationRiskMappingAgent,
+  ObligationControlObjectiveMappingAgent
 } from './core/agents';
 import { withTrace, currentTrace, recentTraces, computeStats } from './core/observability';
 import { runIntegrityScan } from './core/integrity_scan';
@@ -265,7 +266,8 @@ app.get('/api/platforms', (req, res) => {
       { id: 'risk-control-mapping', name: 'Risk-Control Mapping Agent', description: 'Analyses entity risks and maps relevant mitigating controls from library.' },
       { id: 'issue-identification', name: 'Issue Identification Agent', description: 'Drafts a tracked issue for a risk, given its sys_id — trigger is external (e.g. a ServiceNow client script), not scan-based.' },
       { id: 'authority-document-citation', name: 'LRR Obligation Mapping Agent', description: 'Maps authority documents to obligations with semantic matching and priority analysis.' },
-      { id: 'citation-risk-mapping', name: 'Citation to Risk Mapping Agent', description: 'Maps citations/obligations to breachable entity risks with ranked candidate evaluation, gap identification, and over-mapping detection.' }
+      { id: 'citation-risk-mapping', name: 'Citation to Risk Mapping Agent', description: 'Maps citations/obligations to breachable entity risks with ranked candidate evaluation, gap identification, and over-mapping detection.' },
+      { id: 'obligation-control-objective-mapping', name: 'Obligation-Control Objective Mapping Agent', description: 'Maps obligations to control objectives using a multi-pass evaluation and gap analysis loop.' }
     ]
   });
 });
@@ -326,7 +328,7 @@ app.post('/api/run-agent', async (req, res) => {
     originalLog(...args);
   };
 
-  if (!['control-effectiveness', 'inherent-assessment', 'risk-control-mapping', 'issue-identification', 'authority-document-citation', 'lrr-obligation-mapping', 'regulatory-decomposition', 'citation-risk-mapping'].includes(agent)) {
+  if (!['control-effectiveness', 'inherent-assessment', 'risk-control-mapping', 'issue-identification', 'authority-document-citation', 'lrr-obligation-mapping', 'regulatory-decomposition', 'citation-risk-mapping', 'obligation-control-objective-mapping'].includes(agent)) {
     console.log = originalLog;
     return res.status(400).json({
       error: `Unsupported agent action: ${agent}`,
@@ -359,6 +361,8 @@ app.post('/api/run-agent', async (req, res) => {
           agentResult = await new AuthorityDocumentCitationAgent(adapter, llmClient).execute(targetId, req.body.options || req.body);
         } else if (agent === 'citation-risk-mapping') {
           agentResult = await new CitationRiskMappingAgent(adapter, llmClient).execute(targetId);
+        } else if (agent === 'obligation-control-objective-mapping') {
+          agentResult = await new ObligationControlObjectiveMappingAgent(adapter, llmClient).execute(targetId);
         } else {
           agentResult = await new RiskControlMappingAgent(adapter, llmClient).execute(targetId);
         }

@@ -37,6 +37,7 @@ const sn_risk_risk: Array<{
   profile: string;
   profile_name: string;
   u_citations?: string;
+  u_ai_recommendations?: string;
   u_ai_recommendation?: string;
 }> = [
   { sys_id: 'risk_001', name: 'Unauthorized DB Access', description: 'Risk of malicious actors gaining direct access to customer DB records.', profile: 'profile_db_server', profile_name: 'Core DB Cluster', u_citations: 'obl_001,obl_003' },
@@ -110,6 +111,20 @@ const sn_grc_issue = [
 ];
 
 const sn_risk_m2m_risk_control: Array<{ sn_risk_risk: string, sn_compliance_control: string }> = [];
+
+// ── Control Objectives (sn_compliance_policy_statement) mock data ────────────
+const sn_compliance_policy_statement = [
+  { sys_id: 'obj_101', name: 'Data Encryption at Rest and in Transit', description: 'Ensure all sensitive data is encrypted using industry-standard algorithms at rest and in transit.', category: 'Data Protection', active: true },
+  { sys_id: 'obj_102', name: 'Multi-Factor Authentication Enforcement', description: 'Enforce MFA for all privileged and non-privileged user access across systems.', category: 'Access Control', active: true },
+  { sys_id: 'obj_103', name: 'Immutable Audit Logging', description: 'Maintain tamper-proof audit logs for all system access, configuration changes, and financial transactions.', category: 'Audit & Accountability', active: true },
+  { sys_id: 'obj_104', name: 'Incident Notification & Response', description: 'Detect, classify, and notify relevant stakeholders within defined timeframes upon a security or compliance incident.', category: 'Incident Management', active: true },
+  { sys_id: 'obj_105', name: 'Role-Based Access Control & Segregation of Duties', description: 'Implement least-privilege RBAC and enforce strict separation of duties for all production and financial processes.', category: 'Access Control', active: true },
+  { sys_id: 'obj_106', name: 'Third-Party Vendor Security Assessment', description: 'Conduct mandatory security assessments and continuous compliance monitoring for all external vendors and sub-processors.', category: 'Vendor Management', active: true }
+];
+
+// ── Obligation → Control Objective link table mock (sn_compliance_m2m_statement_citation) ──
+const sn_compliance_m2m_statement_citation: Array<{ sn_compliance_citation: string; sn_compliance_policy_statement: string }> = [];
+const sn_compliance_m2m_citation_policy_statement = sn_compliance_m2m_statement_citation;
 
 const sn_compliance_authority_document = [
   { sys_id: 'auth_doc_001', name: 'Basel III Framework', number: 'AD001', type: 'Regulation', description: 'Basel III regulatory framework for banking supervision and capital adequacy.', category: 'Banking', url: 'https://www.bis.org/bcbs/publ/d424.pdf' },
@@ -1183,7 +1198,7 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
     });
 
     console.log(`[ServiceNow DB UPDATE] Created ${matchedControls.length} rows in [sn_risk_m2m_risk_control] linking risk [${riskSysId}]`);
-    console.log(`[ServiceNow DB UPDATE] Table [sn_risk_risk] row [${riskSysId}] -> u_ai_recommendation: [HTML summary written]`);
+    console.log(`[ServiceNow DB UPDATE] Table [sn_risk_risk] row [${riskSysId}] -> u_ai_recommendations: [HTML summary written]`);
     return true;
   }
 
@@ -1592,7 +1607,7 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       console.warn(
         `\n================================================================================\n` +
         `  ⚠️  MOCK-MODE WRITE [Instance: '${this.instanceId}'] - writeRiskMappingSummary\n` +
-        `  ⚠️  SILENTLY SKIPPED! u_ai_recommendation was NOT written to ServiceNow!\n` +
+        `  ⚠️  SILENTLY SKIPPED! u_ai_recommendations was NOT written to ServiceNow!\n` +
         `  ⚠️  Risk: ${riskSysId}\n` +
         `  ⚠️  To fix: ensure SERVICENOW_INSTANCE_${this.instanceId.replace(/^instance_/i, '').toUpperCase()}_URL and _KEY are set in .env\n` +
         `================================================================================\n`
@@ -1600,12 +1615,17 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       return true;
     }
     try {
-      const persisted = await this.putRecord('sn_risk_risk', riskSysId, { u_ai_recommendation: text });
-      const verified = this.isVerified(persisted, ['u_ai_recommendation']);
-      console.log(`[ServiceNow LIVE UPDATE] ${verified ? 'Wrote and verified' : 'Wrote but could NOT verify'} u_ai_recommendation on risk ${riskSysId}.`);
+      let persisted;
+      try {
+        persisted = await this.putRecord('sn_risk_risk', riskSysId, { u_ai_recommendations: text });
+      } catch {
+        persisted = await this.putRecord('sn_risk_risk', riskSysId, { u_ai_recommendation: text });
+      }
+      const verified = this.isVerified(persisted, ['u_ai_recommendations', 'u_ai_recommendation']);
+      console.log(`[ServiceNow LIVE UPDATE] ${verified ? 'Wrote and verified' : 'Wrote but could NOT verify'} u_ai_recommendations on risk ${riskSysId}.`);
       return verified;
     } catch (e: any) {
-      console.warn(`[ServiceNow LIVE UPDATE] Failed to write u_ai_recommendation: ${e.message}`);
+      console.warn(`[ServiceNow LIVE UPDATE] Failed to write u_ai_recommendations: ${e.message}`);
       return false;
     }
   }
@@ -1764,11 +1784,20 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
 
       if (payload.agentName === 'AuthorityDocumentCitationAgent' || payload.authorityDocSysId) {
         postPayload.u_authority_document = payload.authorityDocSysId || payload.targetId;
-      } else if (payload.agentName === 'CitationRiskMappingAgent' || payload.citationSysId) {
+      } else if (
+        payload.agentName === 'CitationRiskMappingAgent' ||
+        payload.agentName === 'ObligationControlObjectiveMappingAgent' ||
+        payload.agentName.includes('Obligation') ||
+        payload.agentName.includes('Citation') ||
+        payload.citationSysId
+      ) {
         postPayload.u_citation = payload.citationSysId || payload.targetId;
       } else if (payload.agentName === 'RiskControlMappingAgent' || payload.agentName === 'IssueIdentificationAgent') {
         postPayload.u_risk = payload.targetId;
       } else {
+        if (payload.citationSysId) {
+          postPayload.u_citation = payload.citationSysId;
+        }
         if (payload.riskSysId) {
           postPayload.u_risk = payload.riskSysId;
         }
@@ -2310,18 +2339,23 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       const candidateTables = ['sn_compliance_authority_document', 'sn_compliance_document', 'sn_grc_document'];
       for (const table of candidateTables) {
         try {
-          const persisted = await this.putRecord(table, authorityDocSysId, { u_ai_recommendation: narrativeHtml });
-          const verified = this.isVerified(persisted, ['u_ai_recommendation']);
-          console.log(`[ServiceNow LIVE UPDATE] ${verified ? 'Wrote and verified' : 'Wrote'} u_ai_recommendation on ${table} ${authorityDocSysId}.`);
+          let persisted;
+          try {
+            persisted = await this.putRecord(table, authorityDocSysId, { u_ai_recommendations: narrativeHtml });
+          } catch {
+            persisted = await this.putRecord(table, authorityDocSysId, { u_ai_recommendation: narrativeHtml });
+          }
+          const verified = this.isVerified(persisted, ['u_ai_recommendations', 'u_ai_recommendation']);
+          console.log(`[ServiceNow LIVE UPDATE] ${verified ? 'Wrote and verified' : 'Wrote'} u_ai_recommendations on ${table} ${authorityDocSysId}.`);
           return true;
         } catch (e: any) {
-          console.warn(`[ServiceNow LIVE UPDATE] Failed to write u_ai_recommendation on ${table}: ${e.message}`);
+          console.warn(`[ServiceNow LIVE UPDATE] Failed to write u_ai_recommendations on ${table}: ${e.message}`);
         }
       }
       return false;
     }
 
-    console.log(`[ServiceNow DB UPDATE] Table [sn_compliance_authority_document] row [${authorityDocSysId}] -> u_ai_recommendation: [HTML justification summary written]`);
+    console.log(`[ServiceNow DB UPDATE] Table [sn_compliance_authority_document] row [${authorityDocSysId}] -> u_ai_recommendations: [HTML justification summary written]`);
     return true;
   }
 
@@ -2491,15 +2525,19 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
         try {
           let persisted;
           try {
-            persisted = await this.putRecord(table, citationSysId, { u_ai_recommendation: narrativeHtml, comments: narrativeHtml });
+            persisted = await this.putRecord(table, citationSysId, { u_ai_recommendations: narrativeHtml, comments: narrativeHtml });
           } catch {
-            persisted = await this.putRecord(table, citationSysId, { u_ai_recommendation: narrativeHtml });
+            try {
+              persisted = await this.putRecord(table, citationSysId, { u_ai_recommendations: narrativeHtml });
+            } catch {
+              persisted = await this.putRecord(table, citationSysId, { u_ai_recommendation: narrativeHtml });
+            }
           }
-          const verified = this.isVerified(persisted, ['u_ai_recommendation']);
-          console.log(`[ServiceNow LIVE UPDATE] ${verified ? 'Wrote and verified' : 'Wrote'} u_ai_recommendation on ${table} ${citationSysId}.`);
+          const verified = this.isVerified(persisted, ['u_ai_recommendations', 'u_ai_recommendation']);
+          console.log(`[ServiceNow LIVE UPDATE] ${verified ? 'Wrote and verified' : 'Wrote'} u_ai_recommendations on ${table} ${citationSysId}.`);
           return true;
         } catch (e: any) {
-          console.warn(`[ServiceNow LIVE UPDATE] Failed to write u_ai_recommendation on ${table}: ${e.message}`);
+          console.warn(`[ServiceNow LIVE UPDATE] Failed to write u_ai_recommendations on ${table}: ${e.message}`);
         }
       }
       return false;
@@ -2508,10 +2546,210 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
     // Mock fallback mode: persist justification narrative on mock citation record
     const mock = sn_compliance_citation.find(c => c.sys_id === citationSysId);
     if (mock) {
+      (mock as any).u_ai_recommendations = narrativeHtml;
       (mock as any).u_ai_recommendation = narrativeHtml;
       (mock as any).comments = narrativeHtml;
     }
-    console.log(`[ServiceNow DB UPDATE] Table [sn_compliance_citation] row [${citationSysId}] -> u_ai_recommendation: [HTML justification summary written]`);
+    console.log(`[ServiceNow DB UPDATE] Table [sn_compliance_citation] row [${citationSysId}] -> u_ai_recommendations: [HTML justification summary written]`);
+    return true;
+  }
+
+  // ── Obligation → Control Objective Mapping Agent Methods ──────────────────
+
+  async getObligation(obligationSysId: string): Promise<any> {
+    if (this.useLive) {
+      const candidateTables = ['sn_compliance_citation', 'sn_compliance_policy_statement'];
+      for (const table of candidateTables) {
+        try {
+          const results = await this.queryTable<any>(table, {
+            sysparm_query: `sys_id=${obligationSysId}`,
+            sysparm_fields: 'sys_id,name,short_description,description,reference,document,sys_created_on'
+          });
+          if (results && results.length > 0) {
+            const record = results[0];
+            return {
+              sys_id: getValue(record.sys_id),
+              sysId: getValue(record.sys_id),
+              name: getDisplayValue(record.name) || getDisplayValue(record.short_description) || 'Unnamed Obligation',
+              description: getDisplayValue(record.description) || getDisplayValue(record.short_description),
+              reference: getDisplayValue(record.reference),
+              document: getValue(record.document),
+              document_name: getDisplayValue(record.document)
+            };
+          }
+        } catch (e: any) {
+          console.warn(`[ServiceNowAdapter] getObligation query ${table} failed: ${e.message}`);
+        }
+      }
+    }
+
+    // Mock fallback — reuse sn_compliance_citation
+    const mock = sn_compliance_citation.find(c => c.sys_id === obligationSysId);
+    if (mock) {
+      return {
+        sys_id: mock.sys_id,
+        sysId: mock.sys_id,
+        name: mock.name,
+        description: mock.description,
+        reference: mock.reference,
+        document: mock.document,
+        document_name: sn_compliance_authority_document.find(d => d.sys_id === mock.document)?.name || ''
+      };
+    }
+    return null;
+  }
+
+  async getAllControlObjectives(): Promise<any[]> {
+    if (this.useLive) {
+      try {
+        const results = await this.queryTable<any>('sn_compliance_policy_statement', {
+          sysparm_fields: 'sys_id,name,short_description,description,category,active',
+          sysparm_query: 'active=true^ORDERBYname'
+        });
+        if (results && results.length > 0) {
+          console.log(`[ServiceNowAdapter] Found ${results.length} live control objectives in sn_compliance_policy_statement`);
+          return results.map((record: any) => ({
+            sysId: getValue(record.sys_id),
+            name: getDisplayValue(record.name) || getDisplayValue(record.short_description) || 'Unnamed Objective',
+            description: getDisplayValue(record.description) || getDisplayValue(record.short_description) || '',
+            category: getDisplayValue(record.category) || 'General',
+            active: getValue(record.active) !== 'false'
+          }));
+        }
+      } catch (e: any) {
+        console.warn(`[ServiceNowAdapter] getAllControlObjectives live query failed: ${e.message}`);
+      }
+    }
+
+    // Mock fallback
+    return sn_compliance_policy_statement.map(o => ({
+      sysId: o.sys_id,
+      name: o.name,
+      description: o.description,
+      category: o.category,
+      active: o.active
+    }));
+  }
+
+  // Memory-reuse: return the set of control objective sysIds already linked to this obligation
+  async getExistingObligationControlObjectiveMappings(obligationSysId: string): Promise<Set<string> | null> {
+    if (!this.useLive) return null;
+    const candidateTables = ['sn_compliance_m2m_statement_citation', 'sn_compliance_m2m_citation_policy_statement'];
+    for (const table of candidateTables) {
+      try {
+        const results = await this.queryTable<any>(table, {
+          sysparm_query: `sn_compliance_citation=${obligationSysId}^NQcitation=${obligationSysId}`,
+          sysparm_fields: 'sn_compliance_policy_statement,sn_compliance_statement,policy_statement,statement'
+        });
+        if (results && results.length > 0) {
+          const sysIds = results.map(r =>
+            getValue(r.sn_compliance_policy_statement) ||
+            getValue(r.sn_compliance_statement) ||
+            getValue(r.policy_statement) ||
+            getValue(r.statement)
+          ).filter(Boolean);
+          return new Set(sysIds);
+        }
+      } catch (e: any) {
+        console.warn(`[ServiceNowAdapter] Querying ${table} for obligation ${obligationSysId} failed: ${e.message}`);
+      }
+    }
+    return null;
+  }
+
+  async writeObligationControlObjectiveMapping(
+    obligationSysId: string,
+    matchedObjectives: Array<{ sysId: string; reason: string }>,
+    justification: string,
+    gaps: string,
+    recommendations: string
+  ): Promise<boolean> {
+    if (this.useLive) {
+      const candidateTables = ['sn_compliance_m2m_statement_citation', 'sn_compliance_m2m_citation_policy_statement'];
+      let writtenCount = 0;
+      for (const obj of matchedObjectives) {
+        let posted = false;
+        for (const table of candidateTables) {
+          if (posted) break;
+          const payloadVariants = [
+            { sn_compliance_citation: obligationSysId, sn_compliance_policy_statement: obj.sysId },
+            { sn_compliance_citation: obligationSysId, sn_compliance_statement: obj.sysId },
+            { citation: obligationSysId, policy_statement: obj.sysId },
+            { citation: obligationSysId, statement: obj.sysId }
+          ];
+
+          for (const payload of payloadVariants) {
+            try {
+              const persisted = await this.postRecord(table, payload);
+              if (persisted && (persisted.sys_id || persisted.sysId)) {
+                console.log(`[ServiceNow LIVE UPDATE] Created M2M link in ${table} between citation ${obligationSysId} and objective ${obj.sysId}`);
+                writtenCount++;
+                posted = true;
+                break;
+              }
+            } catch (err: any) {
+              // try next variant
+            }
+          }
+        }
+      }
+      console.log(`[ServiceNow LIVE UPDATE] Successfully created ${writtenCount}/${matchedObjectives.length} obligation-control objective links in sn_compliance_m2m_statement_citation.`);
+      return writtenCount > 0;
+    }
+
+    console.warn(
+      `\n================================================================================\n` +
+      `  ⚠️  MOCK-MODE WRITE [Instance: '${this.instanceId}'] - writeObligationControlObjectiveMapping\n` +
+      `  ⚠️  This update ONLY affected IN-MEMORY mock data. NOTHING was sent to ServiceNow!\n` +
+      `  ⚠️  Obligation: ${obligationSysId}, Objectives: ${matchedObjectives.length}\n` +
+      `================================================================================\n`
+    );
+
+    matchedObjectives.forEach(obj => {
+      const exists = sn_compliance_m2m_statement_citation.some(
+        m => ((m as any).sn_compliance_citation === obligationSysId || (m as any).citation === obligationSysId) &&
+             ((m as any).sn_compliance_policy_statement === obj.sysId || (m as any).statement === obj.sysId)
+      );
+      if (!exists) {
+        sn_compliance_m2m_statement_citation.push({
+          sn_compliance_citation: obligationSysId,
+          sn_compliance_policy_statement: obj.sysId
+        });
+      }
+    });
+
+    console.log(`[ServiceNow DB UPDATE] Created ${matchedObjectives.length} rows in [sn_compliance_m2m_statement_citation] linking obligation [${obligationSysId}]`);
+    return true;
+  }
+
+
+  async writeObligationMappingSummary(obligationSysId: string, narrativeHtml: string): Promise<boolean> {
+    if (this.useLive) {
+      const candidateTables = ['sn_compliance_citation', 'sn_compliance_policy_statement'];
+      for (const table of candidateTables) {
+        try {
+          let persisted;
+          try {
+            persisted = await this.putRecord(table, obligationSysId, { u_ai_recommendations: narrativeHtml });
+          } catch {
+            persisted = await this.putRecord(table, obligationSysId, { u_ai_recommendation: narrativeHtml });
+          }
+          const verified = this.isVerified(persisted, ['u_ai_recommendations', 'u_ai_recommendation']);
+          console.log(`[ServiceNow LIVE UPDATE] ${verified ? 'Wrote and verified' : 'Wrote'} u_ai_recommendations on ${table} ${obligationSysId}.`);
+          return true;
+        } catch (e: any) {
+          console.warn(`[ServiceNow LIVE UPDATE] Failed to write u_ai_recommendations on ${table}: ${e.message}`);
+        }
+      }
+      return false;
+    }
+
+    const mock = sn_compliance_citation.find(c => c.sys_id === obligationSysId);
+    if (mock) {
+      (mock as any).u_ai_recommendations = narrativeHtml;
+      (mock as any).u_ai_recommendation = narrativeHtml;
+    }
+    console.log(`[ServiceNow DB UPDATE] Table [sn_compliance_citation] row [${obligationSysId}] -> u_ai_recommendations: [HTML summary written]`);
     return true;
   }
 

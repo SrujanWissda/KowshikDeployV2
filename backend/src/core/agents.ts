@@ -109,7 +109,7 @@ async function writeVerified(tracer: AgentTracer, label: string, write: () => Pr
 // Shared HTML formatting for rich-text ServiceNow fields
 //
 // Confirmed live via sys_dictionary: u_rationale_auditing_purpose,
-// u_ai_recommendation, and u_issue_summarize_ema are `html` type — the only
+// u_ai_recommendations, and u_issue_summarize_ema are `html` type — the only
 // three fields any agent writes into that can render markup at all.
 // additional_comments, inherent_justification, control_justification,
 // residual_justification, and the GRC task/issue `description` fields are
@@ -2167,6 +2167,702 @@ Respond ONLY with valid JSON (no markdown):
 }
 
 // ============================================================================
+// 3. Obligation → Control Objective Mapping Agent
+// ============================================================================
+// Mirrors RiskControlMappingAgent exactly, but maps an Obligation (sn_compliance_citation)
+// to Control Objectives (sn_compliance_policy_statement) instead of Controls.
+// Same tool-calling loop → self-critique → verified write pattern.
+// ============================================================================
+type ResolvedObjective = { sysId: string; name: string; category: string; reason: string };
+
+export class ObligationControlObjectiveMappingAgent {
+  private static readonly BATCH_SIZE = 40;
+  private static readonly DESC_LIMIT = 250;
+  private static readonly OBL_DESC_LIMIT = 600;
+  private terminology: { [key: string]: string } | null;
+
+  constructor(private adapter: BaseGRCAdapter, private llm: BaseLLMClient) {
+    this.terminology = this.adapter.getTerminology() || null;
+  }
+
+  private formatText(text: string, maxChars = 32768): string {
+    if (!text) return text;
+    let result = text;
+    if (this.terminology) {
+      for (const [from, to] of Object.entries(this.terminology)) {
+        const regex = new RegExp(`\\b${from}\\b`, 'gi');
+        result = result.replace(regex, (match) =>
+          match[0] === match[0].toUpperCase() ? to.charAt(0).toUpperCase() + to.slice(1) : to
+        );
+      }
+    }
+    if (result.length > maxChars) {
+      const truncated = result.substring(0, maxChars);
+      const lastSpace = truncated.lastIndexOf(' ');
+      return lastSpace > 0 ? truncated.substring(0, lastSpace) : truncated;
+    }
+    return result;
+  }
+
+  async execute(obligationSysId: string): Promise<{ success: boolean; message: string; details: any }> {
+    const tracer = new AgentTracer();
+    tracer.log('START', { obligationSysId });
+
+    // 1. Fetch the obligation record from sn_compliance_citation
+    const obligation = await (this.adapter as any).getObligation?.(obligationSysId);
+    if (!obligation) {
+      tracer.log('ERROR', { error: 'Obligation not found' });
+      return { success: false, message: 'Obligation not found', details: null };
+    }
+    tracer.log('INFO', { obligationName: obligation.name, reference: obligation.reference });
+
+    // 2. Fetch all control objectives from sn_compliance_policy_statement
+    const objectives = await (this.adapter as any).getAllControlObjectives?.() || [];
+    tracer.log('INFO', { objectivesCount: objectives.length });
+
+    let result: { success: boolean; message: string; details: any };
+
+    if (objectives.length === 0) {
+      result = await this.suggestNewObjectives(obligation, tracer);
+    } else {
+      // Memory-reuse: skip objectives already linked to this obligation
+      const getExisting = (this.adapter as any).getExistingObligationControlObjectiveMappings;
+      let alreadyMappedIds = new Set<string>();
+      if (typeof getExisting === 'function') {
+        const existing = await getExisting.call(this.adapter, obligationSysId);
+        if (existing) alreadyMappedIds = existing;
+      }
+      const alreadyMapped = objectives.filter((o: any) => alreadyMappedIds.has(o.sysId));
+      const toEvaluate = objectives.filter((o: any) => !alreadyMappedIds.has(o.sysId));
+      tracer.log('INFO', { alreadyMappedCount: alreadyMapped.length, toEvaluateCount: toEvaluate.length });
+
+      if (toEvaluate.length === 0) {
+        result = this.finishAlreadyMapped(obligation, objectives.length, alreadyMapped);
+      } else {
+        const draft = toEvaluate.length <= ObligationControlObjectiveMappingAgent.BATCH_SIZE
+          ? await withRetry(() => this.mapObjectivesWithTools(obligation, toEvaluate, alreadyMapped, tracer), 2)
+              .then(d => d ? { ...d, coverageNote: '' } : null)
+          : await this.runChunkedWithTools(obligation, toEvaluate, alreadyMapped, tracer);
+
+        if (!draft) {
+          result = { success: false, message: 'AI evaluation failed for all objective batches — please retry.', details: null };
+        } else {
+          const critiqued = await this.critiqueMappingDecisions(obligation, draft.matches, draft.rejected, tracer);
+
+          const carriedMatches: ResolvedObjective[] = alreadyMapped.map((o: any) => ({
+            sysId: o.sysId, name: o.name, category: o.category || 'General',
+            reason: 'Already mapped to this obligation from a previous run — no changes needed.'
+          }));
+          const allMatches = this.dedupeBySysId([...carriedMatches, ...critiqued.matches]);
+
+          result = allMatches.length === 0
+            ? await this.finishNoMatch(obligation, obligationSysId, objectives.length, critiqued.rejected, draft.justification, draft.gaps, draft.recommendation, tracer, draft.coverageNote)
+            : await this.finishMatched(obligation, obligationSysId, objectives.length, allMatches, critiqued.matches, critiqued.rejected, draft.justification, draft.gaps, draft.recommendation, tracer, draft.coverageNote);
+        }
+      }
+    }
+
+    // Optional narrative on the obligation record
+    const rawWriteSummary = (this.adapter as any).writeObligationMappingSummary;
+    if (typeof rawWriteSummary === 'function' && result.details?.narrative) {
+      await writeVerified(tracer, `obligation ${obligationSysId} u_ai_recommendations`, () =>
+        rawWriteSummary.call(this.adapter, obligationSysId, result.details.narrative)
+      );
+    }
+
+    // Observability trace
+    const outcome = result.success ? 'mapped' : 'failed';
+    tracer.log('END', { outcome });
+    const writeTraceM = (this.adapter as any).writeObservabilityTrace;
+    if (typeof writeTraceM === 'function') {
+      try {
+        await writeTraceM.call(this.adapter, {
+          agentName: 'Obligation-ControlObjectiveAgent',
+          targetId: obligationSysId,
+          citationSysId: obligationSysId,
+          outcome,
+          results: result.details,
+          html: tracer.renderHtml('Obligation-ControlObjectiveAgent', obligation.name || obligationSysId),
+          summary: result.message
+        });
+      } catch (_) { /* observability is best-effort */ }
+    }
+
+    return result;
+  }
+
+  private obligationBlock(obligation: any): string {
+    return [
+      'OBLIGATION:',
+      `Name: ${obligation.name}`,
+      `Reference: ${obligation.reference || 'N/A'}`,
+      `Description: ${(obligation.description || 'No description provided.').substring(0, ObligationControlObjectiveMappingAgent.OBL_DESC_LIMIT)}`
+    ].join('\n');
+  }
+
+  private objectiveListBlock(objectives: any[]): string {
+    const limit = ObligationControlObjectiveMappingAgent.DESC_LIMIT;
+    return objectives.map((o, idx) =>
+      `[${idx + 1}] Name: ${o.name} | Category: ${o.category || 'General'} | Desc: ${(o.description || 'No description').substring(0, limit)}`
+    ).join('\n');
+  }
+
+  private resolveAgainst(raw: Array<{ index: number; reason: string }> | undefined, pool: any[]): ResolvedObjective[] {
+    return (raw || [])
+      .map(r => {
+        const obj = pool[r.index - 1];
+        return obj ? { sysId: obj.sysId, name: obj.name, category: obj.category || 'General', reason: r.reason } : null;
+      })
+      .filter((m): m is ResolvedObjective => m !== null);
+  }
+
+  private unmentionedRejections(pool: any[], matches: Array<{ index: number }>, rejected: Array<{ index: number }>): ResolvedObjective[] {
+    const mentioned = new Set([...matches.map(m => m.index), ...rejected.map(r => r.index)]);
+    return pool
+      .map((obj, idx) => ({ obj, idx: idx + 1 }))
+      .filter(({ idx }) => !mentioned.has(idx))
+      .map(({ obj }) => ({ sysId: obj.sysId, name: obj.name, category: obj.category || 'General', reason: 'Not evaluated as directly satisfying this obligation.' }));
+  }
+
+  private dedupeBySysId(matches: ResolvedObjective[]): ResolvedObjective[] {
+    const seen = new Set<string>();
+    return matches.filter(m => (seen.has(m.sysId) ? false : (seen.add(m.sysId), true)));
+  }
+
+  private alreadyMappedBlock(alreadyMapped: any[]): string {
+    if (alreadyMapped.length === 0) return '';
+    return [
+      '',
+      'ALREADY MAPPED (context only — already linked to this obligation from a previous run, do NOT re-decide these,',
+      'but factor them into your gap analysis):',
+      alreadyMapped.map((o: any) => `- ${o.name}`).join('\n')
+    ].join('\n');
+  }
+
+  private buildMappingTools(obligation: any, pool: any[]): { tools: ToolDeclaration[]; executeTool: (name: string, args: any) => Promise<any> } {
+    const tools: ToolDeclaration[] = [
+      {
+        name: 'get_obligation_full_description',
+        description: 'Get the full text of the obligation being mapped.',
+        parameters: { type: 'OBJECT', properties: {}, required: [] }
+      },
+      {
+        name: 'get_objective_full_description',
+        description: 'Get the full name, category, and description of a specific control objective by its 1-based index.',
+        parameters: {
+          type: 'OBJECT',
+          properties: { index: { type: 'INTEGER', description: '1-based index into the candidate control objective list.' } },
+          required: ['index']
+        }
+      }
+    ];
+
+    const executeTool = async (name: string, args: any): Promise<any> => {
+      switch (name) {
+        case 'get_obligation_full_description':
+          return { name: obligation.name, reference: obligation.reference, description: obligation.description || 'No description provided.' };
+        case 'get_objective_full_description': {
+          const obj = pool[(args?.index || 0) - 1];
+          if (!obj) return { error: 'Invalid index' };
+          return { name: obj.name, category: obj.category || 'General', description: obj.description || 'No description provided.' };
+        }
+        default:
+          return { error: `Unknown tool: ${name}` };
+      }
+    };
+
+    return { tools, executeTool };
+  }
+
+  // ── Single-shot path ──────────────────────────────────────────────────────
+  private async mapObjectivesWithTools(
+    obligation: any, pool: any[], alreadyMapped: any[], tracer: AgentTracer
+  ): Promise<{ matches: ResolvedObjective[]; rejected: ResolvedObjective[]; justification: string; gaps: string; recommendation: string } | null> {
+    const { tools, executeTool } = this.buildMappingTools(obligation, pool);
+
+    tools.push({
+      name: 'submit_mapping',
+      description: 'Finalize your control objective mapping decision once you have gathered enough evidence.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          matches: {
+            type: 'ARRAY',
+            description: 'Control objectives that satisfy this obligation.',
+            items: {
+              type: 'OBJECT',
+              properties: { index: { type: 'INTEGER' }, reason: { type: 'STRING' } },
+              required: ['index', 'reason']
+            }
+          },
+          rejected: {
+            type: 'ARRAY',
+            description: 'Control objectives evaluated but not mapping to this obligation.',
+            items: {
+              type: 'OBJECT',
+              properties: { index: { type: 'INTEGER' }, reason: { type: 'STRING' } },
+              required: ['index', 'reason']
+            }
+          },
+          overall_justification: { type: 'STRING', description: '2-3 sentences on the theme of matched objectives.' },
+          gaps: { type: 'STRING', description: 'Aspects of the obligation not addressed by any matched objective.' },
+          recommendation: { type: 'STRING', description: 'New control objectives to create, if gaps exist.' }
+        },
+        required: ['matches', 'rejected', 'overall_justification', 'gaps']
+      }
+    });
+
+    const initialPrompt = [
+      this.obligationBlock(obligation),
+      this.alreadyMappedBlock(alreadyMapped),
+      '',
+      `CANDIDATE CONTROL OBJECTIVES (${pool.length} total — evaluate all):`,
+      this.objectiveListBlock(pool),
+      '',
+      'TASK: Determine which control objectives, if implemented, would directly satisfy or contribute to this obligation.',
+      'Call get_obligation_full_description and get_objective_full_description(index) as needed to read full details.',
+      'Then call submit_mapping with your final decision.',
+      '',
+      'CRITERIA:',
+      '- MATCH: The objective, when achieved, demonstrably addresses the enforceable duty in the obligation.',
+      '- REJECT: The objective is unrelated or only tangentially relevant to the specific obligation.',
+      '- For every rejected objective explain WHY it does not address the obligation\'s specific duty.'
+    ].join('\n');
+
+    const systemInstruction = `You are Ema, a GRC Compliance mapping architect. You map regulatory obligations to control objectives. Investigate before you conclude: read the obligation and objective details via tools, then call submit_mapping. For every rejected objective, explain why it does not satisfy the specific duty of this obligation.`;
+
+    tracer.log('REQUEST', { path: 'singleShot', prompt_preview: initialPrompt });
+
+    const loop = await this.llm.runToolLoop<{
+      matches: Array<{ index: number; reason: string }>;
+      rejected: Array<{ index: number; reason: string }>;
+      overall_justification: string;
+      gaps: string;
+      recommendation?: string;
+    }>(systemInstruction, initialPrompt, tools, 'submit_mapping', executeTool, 6);
+
+    if (!loop) {
+      tracer.log('ERROR', { path: 'singleShot', error: 'tool loop did not finalize' });
+      return null;
+    }
+
+    tracer.log('RESPONSE', { path: 'singleShot', matchesCount: loop.result.matches?.length || 0, rejectedCount: loop.result.rejected?.length || 0 });
+
+    return {
+      matches: this.dedupeBySysId(this.resolveAgainst(loop.result.matches, pool)),
+      rejected: [
+        ...this.resolveAgainst(loop.result.rejected, pool),
+        ...this.unmentionedRejections(pool, loop.result.matches, loop.result.rejected || [])
+      ],
+      justification: loop.result.overall_justification || '',
+      gaps: loop.result.gaps || '',
+      recommendation: loop.result.recommendation || ''
+    };
+  }
+
+  // ── One chunked batch ─────────────────────────────────────────────────────
+  private async mapObjectivesBatchWithTools(
+    obligation: any, chunk: any[], alreadyMapped: any[], chunkIndex: number, chunksTotal: number, tracer: AgentTracer
+  ): Promise<{ matches: ResolvedObjective[]; rejected: ResolvedObjective[] } | null> {
+    const { tools, executeTool } = this.buildMappingTools(obligation, chunk);
+
+    tools.push({
+      name: 'submit_mapping',
+      description: 'Finalize your control objective mapping decision for this batch.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          matches: {
+            type: 'ARRAY',
+            items: {
+              type: 'OBJECT',
+              properties: { index: { type: 'INTEGER' }, reason: { type: 'STRING' } },
+              required: ['index', 'reason']
+            }
+          },
+          rejected: {
+            type: 'ARRAY',
+            items: {
+              type: 'OBJECT',
+              properties: { index: { type: 'INTEGER' }, reason: { type: 'STRING' } },
+              required: ['index', 'reason']
+            }
+          }
+        },
+        required: ['matches', 'rejected']
+      }
+    });
+
+    const initialPrompt = [
+      this.obligationBlock(obligation),
+      this.alreadyMappedBlock(alreadyMapped),
+      '',
+      `CANDIDATE CONTROL OBJECTIVES — Batch ${chunkIndex} of ${chunksTotal}:`,
+      this.objectiveListBlock(chunk),
+      '',
+      'Evaluate each objective against this obligation. Call submit_mapping with your matches and rejections for this batch.'
+    ].join('\n');
+
+    const systemInstruction = `You are Ema, a GRC Compliance mapping architect reviewing one batch of a larger control objective library against a single obligation. Investigate via tools before you conclude.`;
+
+    tracer.log('REQUEST', { path: 'chunked_batch', batchIndex: chunkIndex, prompt_preview: initialPrompt });
+
+    const loop = await this.llm.runToolLoop<{ matches: Array<{ index: number; reason: string }>; rejected: Array<{ index: number; reason: string }> }>(
+      systemInstruction, initialPrompt, tools, 'submit_mapping', executeTool, 6
+    );
+
+    if (!loop) {
+      tracer.log('ERROR', { path: 'chunked_batch', batchIndex: chunkIndex, error: 'tool loop did not finalize' });
+      return null;
+    }
+
+    tracer.log('RESPONSE', { path: 'chunked_batch', batchIndex: chunkIndex, matchesCount: loop.result.matches?.length || 0, rejectedCount: loop.result.rejected?.length || 0 });
+
+    return {
+      matches: this.resolveAgainst(loop.result.matches, chunk),
+      rejected: [...this.resolveAgainst(loop.result.rejected, chunk), ...this.unmentionedRejections(chunk, loop.result.matches, loop.result.rejected || [])]
+    };
+  }
+
+  // ── Chunked path ──────────────────────────────────────────────────────────
+  private async runChunkedWithTools(
+    obligation: any, objectives: any[], alreadyMapped: any[], tracer: AgentTracer
+  ): Promise<{ matches: ResolvedObjective[]; rejected: ResolvedObjective[]; justification: string; gaps: string; recommendation: string; coverageNote: string } | null> {
+    const batchSize = ObligationControlObjectiveMappingAgent.BATCH_SIZE;
+    const chunksTotal = Math.ceil(objectives.length / batchSize);
+    const indexedChunks: Array<{ chunk: any[]; index: number }> = [];
+    for (let i = 0; i < objectives.length; i += batchSize) {
+      indexedChunks.push({ chunk: objectives.slice(i, i + batchSize), index: indexedChunks.length + 1 });
+    }
+
+    const batchResults = await runInParallelBatches(indexedChunks, 5, async ({ chunk, index }) =>
+      withRetry(() => this.mapObjectivesBatchWithTools(obligation, chunk, alreadyMapped, index, chunksTotal, tracer), 2)
+    );
+
+    let allMatches: ResolvedObjective[] = [];
+    let allRejected: ResolvedObjective[] = [];
+    let chunksOk = 0;
+    for (const res of batchResults) {
+      const resAny = res as any;
+      if (!res || !resAny || resAny.success === false || !('matches' in resAny)) {
+        console.warn(`[ObligationControlObjectiveMappingAgent] Skipping batch chunk: ${resAny?.error || 'no result'}`);
+        continue;
+      }
+      chunksOk++;
+      allMatches.push(...resAny.matches);
+      allRejected.push(...resAny.rejected);
+    }
+
+    if (chunksOk === 0) return null;
+    allMatches = this.dedupeBySysId(allMatches);
+    const coverageNote = chunksOk < chunksTotal
+      ? `Note: only ${chunksOk} of ${chunksTotal} objective batches were evaluated — re-run to complete coverage.`
+      : '';
+
+    // Consolidation call
+    let justification = '', gaps = '', recommendation = '';
+    try {
+      const matchedList = [
+        ...alreadyMapped.map((o: any) => `- ${o.name} (already mapped from a previous run)`),
+        ...allMatches.map(m => `- ${m.name} (${m.reason})`)
+      ];
+      const consPrompt = [
+        this.obligationBlock(obligation),
+        '',
+        'MATCHED CONTROL OBJECTIVES (selected across all batches, plus any already mapped):',
+        matchedList.length > 0 ? matchedList.join('\n') : '(none — no existing objective matched)',
+        '',
+        'TASK:',
+        '1. overall_justification: 2-3 sentences on the common theme across matched objectives.',
+        '2. gaps: 2-4 sentences on aspects of the obligation NOT covered by matched objectives.',
+        '3. recommendation: only if gaps exist — objectives to create. Empty string otherwise.'
+      ].join('\n');
+      const consSchema = {
+        type: 'OBJECT',
+        properties: { overall_justification: { type: 'STRING' }, gaps: { type: 'STRING' }, recommendation: { type: 'STRING' } },
+        required: ['overall_justification', 'gaps']
+      };
+      tracer.log('REQUEST', { path: 'consolidation', prompt_preview: consPrompt });
+      const cons = await this.llm.generateStructuredOutput<{ overall_justification: string; gaps: string; recommendation?: string }>(consPrompt, 'You are a GRC Compliance mapping architect writing a consolidated obligation-objective summary.', consSchema);
+      tracer.log('RESPONSE', { path: 'consolidation', status: 'completed' });
+      justification = cons.overall_justification || '';
+      gaps = cons.gaps || '';
+      recommendation = cons.recommendation || '';
+    } catch (e: any) {
+      tracer.log('ERROR', { path: 'consolidation', error: e.message });
+    }
+
+    return { matches: allMatches, rejected: allRejected, justification, gaps, recommendation, coverageNote };
+  }
+
+  // ── Pass 2: self-critique ─────────────────────────────────────────────────
+  private async critiqueMappingDecisions(
+    obligation: any, matches: ResolvedObjective[], rejected: ResolvedObjective[], tracer: AgentTracer
+  ): Promise<{ matches: ResolvedObjective[]; rejected: ResolvedObjective[] }> {
+    type Decision = ResolvedObjective & { decision: 'match' | 'reject' };
+    const allDecisions: Decision[] = [
+      ...matches.map(m => ({ ...m, decision: 'match' as const })),
+      ...rejected.map(r => ({ ...r, decision: 'reject' as const }))
+    ];
+    if (allDecisions.length === 0) return { matches, rejected };
+
+    const critiqueChunkSize = 8;
+    const chunks: Decision[][] = [];
+    for (let i = 0; i < allDecisions.length; i += critiqueChunkSize) {
+      chunks.push(allDecisions.slice(i, i + critiqueChunkSize));
+    }
+
+    const flips = new Map<string, { decision: 'match' | 'reject'; note: string }>();
+
+    await Promise.all(chunks.map(async chunk => {
+      const blocks = chunk.map((d, idx) =>
+        `[${idx + 1}] OBJECTIVE: ${d.name} (${d.category})\n    CURRENT DECISION: ${d.decision === 'match' ? 'MAPPED' : 'REJECTED'}\n    REASON: ${d.reason}`
+      ).join('\n\n');
+
+      const prompt = [
+        'You are Ema, now reviewing your own draft obligation-control objective mapping decisions as a second, independent pass.',
+        'For each objective below, a first pass already decided whether it maps to this obligation and why.',
+        'Check whether that decision actually follows from the obligation and objective shown.',
+        '',
+        `OBLIGATION: ${obligation.name}`,
+        `Description: ${(obligation.description || 'No description provided.').substring(0, ObligationControlObjectiveMappingAgent.OBL_DESC_LIMIT)}`,
+        '',
+        blocks,
+        '',
+        'For each objective: if the decision is well-supported, respond action="confirm". If it is not, respond',
+        'action="flip" and explain in "note" specifically what the first pass got wrong.',
+        '',
+        'Respond ONLY with valid JSON, no markdown:',
+        '{"reviews": [{"index": 1, "action": "confirm", "note": ""}, ...]}'
+      ].join('\n');
+
+      const schema = {
+        type: 'OBJECT',
+        properties: {
+          reviews: {
+            type: 'ARRAY',
+            items: {
+              type: 'OBJECT',
+              properties: { index: { type: 'INTEGER' }, action: { type: 'STRING' }, note: { type: 'STRING' } },
+              required: ['index', 'action']
+            }
+          }
+        },
+        required: ['reviews']
+      };
+
+      tracer.log('REQUEST', { phase: 'critique', prompt_preview: prompt });
+
+      try {
+        const response = await this.llm.generateStructuredOutput<{ reviews: Array<{ index: number; action: string; note?: string }> }>(
+          prompt, 'You are Ema, acting as an independent second reviewer of draft obligation-control objective mapping decisions.', schema
+        );
+        tracer.log('RESPONSE', { phase: 'critique', status: 'completed', reviews: response.reviews });
+        for (const review of response.reviews || []) {
+          const d = chunk[review.index - 1];
+          if (!d || review.action !== 'flip') continue;
+          flips.set(d.sysId, { decision: d.decision === 'match' ? 'reject' : 'match', note: review.note || 'decision did not hold up on review.' });
+        }
+      } catch (e: any) {
+        tracer.log('ERROR', { phase: 'critique', error: e.message });
+      }
+    }));
+
+    if (flips.size === 0) return { matches, rejected };
+
+    const annotate = (r: ResolvedObjective, note: string): ResolvedObjective => ({ ...r, reason: `${r.reason}\n\n🔁 Revised on second-pass review: ${note}` });
+
+    const finalMatches = [
+      ...matches.filter(m => !flips.has(m.sysId)),
+      ...rejected.filter(r => flips.get(r.sysId)?.decision === 'match').map(r => annotate(r, flips.get(r.sysId)!.note))
+    ];
+    const finalRejected = [
+      ...rejected.filter(r => !flips.has(r.sysId)),
+      ...matches.filter(m => flips.get(m.sysId)?.decision === 'reject').map(m => annotate(m, flips.get(m.sysId)!.note))
+    ];
+
+    return { matches: finalMatches, rejected: finalRejected };
+  }
+
+  // ── All objectives already linked ────────────────────────────────────────
+  private finishAlreadyMapped(obligation: any, totalObjectives: number, alreadyMapped: any[]) {
+    const matches: ResolvedObjective[] = alreadyMapped.map((o: any) => ({
+      sysId: o.sysId, name: o.name, category: o.category || 'General',
+      reason: 'Already mapped to this obligation from a previous run — no changes needed.'
+    }));
+
+    const narrative = [
+      `${htmlLabel('SUMMARY:')} All ${alreadyMapped.length} candidate control objective(s) are already mapped to this obligation from a previous run.`,
+      `No new objectives to evaluate — nothing was re-decided or re-written.`
+    ].join('<br><br>');
+
+    return {
+      success: true,
+      message: `All ${alreadyMapped.length} control objective(s) already mapped — nothing new to evaluate.`,
+      details: {
+        totalObjectivesEvaluated: totalObjectives,
+        matches,
+        rejected: [],
+        justification: 'All candidate control objectives were already mapped to this obligation from a previous run.',
+        gaps: '',
+        recommendations: '',
+        narrative
+      }
+    };
+  }
+
+  // ── No objectives exist at all ────────────────────────────────────────────
+  private async suggestNewObjectives(obligation: any, tracer: AgentTracer) {
+    const prompt = [
+      `You are a GRC compliance expert. No control objectives exist yet for this obligation.`,
+      '',
+      this.obligationBlock(obligation),
+      '',
+      'TASK: Suggest 2-4 control objectives to create to satisfy this obligation. Each needs a concise name,',
+      'a category (e.g. Data Protection, Access Control, Audit & Accountability), and a 1-2 sentence description.',
+      'Also provide a 2-3 sentence explanation of why these objectives together address the obligation.'
+    ].join('\n');
+
+    const schema = {
+      type: 'OBJECT',
+      properties: {
+        suggested_objectives: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              name: { type: 'STRING' },
+              category: { type: 'STRING' },
+              description: { type: 'STRING' }
+            },
+            required: ['name', 'description']
+          }
+        },
+        explanation: { type: 'STRING' }
+      },
+      required: ['suggested_objectives', 'explanation']
+    };
+
+    tracer.log('REQUEST', { path: 'suggestNewObjectives', prompt_preview: prompt });
+
+    const response = await this.llm.generateStructuredOutput<{ suggested_objectives: Array<{ name: string; category?: string; description: string }>; explanation: string }>(
+      prompt, 'You are a GRC expert recommending new control objectives where a library gap exists.', schema
+    );
+
+    const suggestions = response.suggested_objectives || [];
+    tracer.log('RESPONSE', { path: 'suggestNewObjectives', suggestionsCount: suggestions.length });
+
+    await writeVerified(tracer, `obligation-control objective mapping (no existing objectives) for ${obligation.sysId || ''}`, () =>
+      (this.adapter as any).writeObligationControlObjectiveMapping?.(
+        obligation.sysId || obligation.sys_id,
+        [],
+        'No control objectives currently exist in the library for this obligation.',
+        `No control objectives exist in the library to cover obligation: ${obligation.name}.`,
+        suggestions.map((s: any) => `${s.name}: ${s.description}`).join('\n')
+      ) ?? Promise.resolve(true)
+    );
+
+    const narrative = [
+      `${htmlLabel('SUMMARY:')} No control objectives exist in the library for obligation "${htmlEscape(obligation.name)}".`,
+      `${htmlLabel('SUGGESTED OBJECTIVES TO CREATE:')}<br>${suggestions.map((c: any) => htmlChoiceLine(c.name, c.description, true)).join('<br>')}`,
+      `${htmlLabel('WHY THESE OBJECTIVES:')}<br>${htmlEscape(response.explanation || 'Not provided')}`
+    ].join('<br><br>');
+
+    return {
+      success: true,
+      message: `No control objectives available — suggested ${suggestions.length} new objective(s)`,
+      details: {
+        totalObjectivesEvaluated: 0,
+        matches: [],
+        rejected: [],
+        suggestedObjectives: suggestions,
+        explanation: response.explanation,
+        narrative
+      }
+    };
+  }
+
+  private async finishMatched(
+    obligation: any, obligationSysId: string, totalObjectives: number,
+    allMatches: ResolvedObjective[], newMatchesToWrite: ResolvedObjective[], rejected: ResolvedObjective[],
+    justification: string, gaps: string, recommendation: string, tracer: AgentTracer, coverageNote: string = ''
+  ) {
+    const verified = newMatchesToWrite.length > 0
+      ? await writeVerified(tracer, `obligation-control objective mapping for ${obligationSysId}`, () =>
+          (this.adapter as any).writeObligationControlObjectiveMapping?.(
+            obligationSysId,
+            newMatchesToWrite,
+            this.formatText(justification),
+            this.formatText(gaps),
+            this.formatText(recommendation)
+          ) ?? Promise.resolve(true)
+        )
+      : true;
+
+    const carriedCount = allMatches.length - newMatchesToWrite.length;
+    const narrative = [
+      `${htmlLabel('SUMMARY:')} Mapped ${allMatches.length} control objective(s) to this obligation${carriedCount > 0 ? ` (${carriedCount} already mapped from a previous run, ${newMatchesToWrite.length} newly added)` : ''}. Rejected ${rejected.length} objective(s).`,
+      `${htmlLabel('RATIONALE — why these were picked and why others were rejected:')}<br>${htmlEscape(justification || 'Not provided')}`,
+      `${htmlLabel('GAPS — aspects of the obligation not covered by existing objectives:')}<br>${htmlEscape(gaps || 'None identified')}`,
+      ...(coverageNote ? [htmlEscape(coverageNote)] : [])
+    ].join('<br><br>');
+
+    return {
+      success: true,
+      message: `Mapped ${allMatches.length} control objective(s) to obligation (${newMatchesToWrite.length} new). Rejected ${rejected.length} objective(s).`,
+      details: {
+        totalObjectivesEvaluated: totalObjectives,
+        matches: allMatches,
+        rejected,
+        justification,
+        gaps,
+        recommendations: recommendation,
+        narrative,
+        verified
+      }
+    };
+  }
+
+  private async finishNoMatch(
+    obligation: any, obligationSysId: string, totalObjectives: number, rejected: ResolvedObjective[],
+    justification: string, gaps: string, recommendation: string, tracer: AgentTracer, coverageNote: string = ''
+  ) {
+    const verified = await writeVerified(tracer, `obligation-control objective mapping (no match) for ${obligationSysId}`, () =>
+      (this.adapter as any).writeObligationControlObjectiveMapping?.(
+        obligationSysId,
+        [],
+        this.formatText(justification),
+        this.formatText(gaps),
+        this.formatText(recommendation)
+      ) ?? Promise.resolve(true)
+    );
+
+    const narrative = [
+      `${htmlLabel('SUMMARY:')} Reviewed ${totalObjectives} control objective(s) and found none that genuinely satisfy this obligation.`,
+      `${htmlLabel('RATIONALE — why each was rejected:')}<br>${htmlEscape(justification || 'Not provided')}`,
+      `${htmlLabel('GAPS:')}<br>${htmlEscape(gaps || 'Not provided')}`,
+      ...(recommendation ? [`${htmlLabel('RECOMMENDED OBJECTIVES TO CREATE:')}<br>${htmlEscape(recommendation)}`] : []),
+      ...(coverageNote ? [htmlEscape(coverageNote)] : [])
+    ].join('<br><br>');
+
+    return {
+      success: true,
+      message: 'No genuine match found — recommendation written',
+      details: {
+        totalObjectivesEvaluated: totalObjectives,
+        matches: [],
+        rejected,
+        justification,
+        gaps,
+        recommendations: recommendation,
+        narrative,
+        verified
+      }
+    };
+  }
+}
+
+// ============================================================================
 // 3. Risk-Control Mapping Agent
 // ============================================================================
 type ResolvedControl = { sysId: string; name: string; category: string; reason: string };
@@ -2275,14 +2971,14 @@ export class RiskControlMappingAgent {
     }
 
     // Optional instance-level narrative (ServiceNow's advanced risk module
-    // carries a single u_ai_recommendation-style field directly on the risk
+    // carries a single u_ai_recommendations-style field directly on the risk
     // record). Most platforms have no equivalent, so this is duck-typed —
     // same convention as the Control Effectiveness / Inherent Assessment
     // justification writes — and only fires when both the adapter supports
     // it AND execute() actually produced a narrative to write.
     const rawWriteSummary = (this.adapter as any).writeRiskMappingSummary;
     if (typeof rawWriteSummary === 'function' && result.details?.narrative) {
-      await writeVerified(tracer, `risk ${riskSysId} u_ai_recommendation`, () =>
+      await writeVerified(tracer, `risk ${riskSysId} u_ai_recommendations`, () =>
         rawWriteSummary.call(this.adapter, riskSysId, result.details.narrative)
       );
     }
@@ -3674,15 +4370,15 @@ CRITICAL RULES:
 
     const narrative = narrativeLines.join('<br>');
 
-    // 7. Write narrative back to authority document's u_ai_recommendation
+    // 7. Write narrative back to authority document's u_ai_recommendations
     const rawWriteDocSummary = (this.adapter as any).writeAuthorityDocumentSummary;
     if (typeof rawWriteDocSummary === 'function' && docSysId) {
       try {
-        await writeVerified(tracer, `authority document ${docSysId} u_ai_recommendation`, () =>
+        await writeVerified(tracer, `authority document ${docSysId} u_ai_recommendations`, () =>
           rawWriteDocSummary.call(this.adapter, docSysId, narrative)
         );
       } catch (err: any) {
-        tracer.log('WARN', { error: `Failed writing u_ai_recommendation on authority document: ${err.message}` });
+        tracer.log('WARN', { error: `Failed writing u_ai_recommendations on authority document: ${err.message}` });
       }
     }
 
@@ -4059,15 +4755,15 @@ Return JSON with this exact structure:
 
     const narrative = narrativeLines.join('<br>');
 
-    // 8. Write narrative to the citation's u_ai_recommendation
+    // 8. Write narrative to the citation's u_ai_recommendations
     const rawWriteCitationSummary = (this.adapter as any).writeCitationSummary;
     if (typeof rawWriteCitationSummary === 'function') {
       try {
-        await writeVerified(tracer, `citation ${citationSysId} u_ai_recommendation`, () =>
+        await writeVerified(tracer, `citation ${citationSysId} u_ai_recommendations`, () =>
           rawWriteCitationSummary.call(this.adapter, citationSysId, narrative)
         );
       } catch (err: any) {
-        tracer.log('WARN', { error: `Failed writing u_ai_recommendation on citation: ${err.message}` });
+        tracer.log('WARN', { error: `Failed writing u_ai_recommendations on citation: ${err.message}` });
       }
     }
 
