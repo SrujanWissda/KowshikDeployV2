@@ -1198,7 +1198,7 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
     });
 
     console.log(`[ServiceNow DB UPDATE] Created ${matchedControls.length} rows in [sn_risk_m2m_risk_control] linking risk [${riskSysId}]`);
-    console.log(`[ServiceNow DB UPDATE] Table [sn_risk_risk] row [${riskSysId}] -> u_ai_recommendations: [HTML summary written]`);
+    console.log(`[ServiceNow DB UPDATE] Table [sn_risk_risk] row [${riskSysId}] -> u_ai_recommendation: [HTML summary written]`);
     return true;
   }
 
@@ -1607,7 +1607,7 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
       console.warn(
         `\n================================================================================\n` +
         `  ⚠️  MOCK-MODE WRITE [Instance: '${this.instanceId}'] - writeRiskMappingSummary\n` +
-        `  ⚠️  SILENTLY SKIPPED! u_ai_recommendations was NOT written to ServiceNow!\n` +
+        `  ⚠️  SILENTLY SKIPPED! u_ai_recommendation was NOT written to ServiceNow!\n` +
         `  ⚠️  Risk: ${riskSysId}\n` +
         `  ⚠️  To fix: ensure SERVICENOW_INSTANCE_${this.instanceId.replace(/^instance_/i, '').toUpperCase()}_URL and _KEY are set in .env\n` +
         `================================================================================\n`
@@ -1617,15 +1617,15 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
     try {
       let persisted;
       try {
-        persisted = await this.putRecord('sn_risk_risk', riskSysId, { u_ai_recommendations: text });
-      } catch {
         persisted = await this.putRecord('sn_risk_risk', riskSysId, { u_ai_recommendation: text });
+      } catch {
+        persisted = await this.putRecord('sn_risk_risk', riskSysId, { u_ai_recommendations: text });
       }
-      const verified = this.isVerified(persisted, ['u_ai_recommendations', 'u_ai_recommendation']);
-      console.log(`[ServiceNow LIVE UPDATE] ${verified ? 'Wrote and verified' : 'Wrote but could NOT verify'} u_ai_recommendations on risk ${riskSysId}.`);
+      const verified = this.isVerified(persisted, ['u_ai_recommendation', 'u_ai_recommendations']);
+      console.log(`[ServiceNow LIVE UPDATE] ${verified ? 'Wrote and verified' : 'Wrote but could NOT verify'} u_ai_recommendation on risk ${riskSysId}.`);
       return verified;
     } catch (e: any) {
-      console.warn(`[ServiceNow LIVE UPDATE] Failed to write u_ai_recommendations: ${e.message}`);
+      console.warn(`[ServiceNow LIVE UPDATE] Failed to write u_ai_recommendation: ${e.message}`);
       return false;
     }
   }
@@ -2341,21 +2341,21 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
         try {
           let persisted;
           try {
-            persisted = await this.putRecord(table, authorityDocSysId, { u_ai_recommendations: narrativeHtml });
-          } catch {
             persisted = await this.putRecord(table, authorityDocSysId, { u_ai_recommendation: narrativeHtml });
+          } catch {
+            persisted = await this.putRecord(table, authorityDocSysId, { u_ai_recommendations: narrativeHtml });
           }
-          const verified = this.isVerified(persisted, ['u_ai_recommendations', 'u_ai_recommendation']);
-          console.log(`[ServiceNow LIVE UPDATE] ${verified ? 'Wrote and verified' : 'Wrote'} u_ai_recommendations on ${table} ${authorityDocSysId}.`);
+          const verified = this.isVerified(persisted, ['u_ai_recommendation', 'u_ai_recommendations']);
+          console.log(`[ServiceNow LIVE UPDATE] ${verified ? 'Wrote and verified' : 'Wrote'} u_ai_recommendation on ${table} ${authorityDocSysId}.`);
           return true;
         } catch (e: any) {
-          console.warn(`[ServiceNow LIVE UPDATE] Failed to write u_ai_recommendations on ${table}: ${e.message}`);
+          console.warn(`[ServiceNow LIVE UPDATE] Failed to write u_ai_recommendation on ${table}: ${e.message}`);
         }
       }
       return false;
     }
 
-    console.log(`[ServiceNow DB UPDATE] Table [sn_compliance_authority_document] row [${authorityDocSysId}] -> u_ai_recommendations: [HTML justification summary written]`);
+    console.log(`[ServiceNow DB UPDATE] Table [sn_compliance_authority_document] row [${authorityDocSysId}] -> u_ai_recommendation: [HTML justification summary written]`);
     return true;
   }
 
@@ -2525,19 +2525,19 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
         try {
           let persisted;
           try {
-            persisted = await this.putRecord(table, citationSysId, { u_ai_recommendations: narrativeHtml, comments: narrativeHtml });
+            persisted = await this.putRecord(table, citationSysId, { u_ai_recommendation: narrativeHtml, comments: narrativeHtml });
           } catch {
             try {
-              persisted = await this.putRecord(table, citationSysId, { u_ai_recommendations: narrativeHtml });
-            } catch {
               persisted = await this.putRecord(table, citationSysId, { u_ai_recommendation: narrativeHtml });
+            } catch {
+              persisted = await this.putRecord(table, citationSysId, { u_ai_recommendations: narrativeHtml });
             }
           }
-          const verified = this.isVerified(persisted, ['u_ai_recommendations', 'u_ai_recommendation']);
-          console.log(`[ServiceNow LIVE UPDATE] ${verified ? 'Wrote and verified' : 'Wrote'} u_ai_recommendations on ${table} ${citationSysId}.`);
+          const verified = this.isVerified(persisted, ['u_ai_recommendation', 'u_ai_recommendations']);
+          console.log(`[ServiceNow LIVE UPDATE] ${verified ? 'Wrote and verified' : 'Wrote'} u_ai_recommendation on ${table} ${citationSysId}.`);
           return true;
         } catch (e: any) {
-          console.warn(`[ServiceNow LIVE UPDATE] Failed to write u_ai_recommendations on ${table}: ${e.message}`);
+          console.warn(`[ServiceNow LIVE UPDATE] Failed to write u_ai_recommendation on ${table}: ${e.message}`);
         }
       }
       return false;
@@ -2546,11 +2546,11 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
     // Mock fallback mode: persist justification narrative on mock citation record
     const mock = sn_compliance_citation.find(c => c.sys_id === citationSysId);
     if (mock) {
-      (mock as any).u_ai_recommendations = narrativeHtml;
       (mock as any).u_ai_recommendation = narrativeHtml;
+      (mock as any).u_ai_recommendations = narrativeHtml;
       (mock as any).comments = narrativeHtml;
     }
-    console.log(`[ServiceNow DB UPDATE] Table [sn_compliance_citation] row [${citationSysId}] -> u_ai_recommendations: [HTML justification summary written]`);
+    console.log(`[ServiceNow DB UPDATE] Table [sn_compliance_citation] row [${citationSysId}] -> u_ai_recommendation: [HTML justification summary written]`);
     return true;
   }
 

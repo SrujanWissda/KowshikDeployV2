@@ -1588,7 +1588,7 @@ async function runLocalAgentSimulation(platform, agent, targetId) {
         '  ├─ 📝 [DRAFT] Customer PII Leak via Support Portal → Customer Support Operations',
         '  │    Gap: Support ticketing system lacks dedicated risk for PII in ticket attachments.',
         '  └─ 📝 [DRAFT] Financial Record Exfiltration → Financial Operations & Billing',
-        '[ServiceNow DB UPDATE] Table [sn_compliance_citation] row ' + targetId + ' -> u_ai_recommendations: [HTML summary written]'
+        '[ServiceNow DB UPDATE] Table [sn_compliance_citation] row ' + targetId + ' -> u_ai_recommendation: [HTML summary written]'
       ];
     } else if (agent === 'obligation-control-objective-mapping') {
       logs = [
@@ -1604,7 +1604,7 @@ async function runLocalAgentSimulation(platform, agent, targetId) {
         '[ServiceNow DB UPDATE] Created 2 rows in [sn_risk_m2m_risk_control] linking to risk_001:',
         '  ├─ Database Password Rotation (ctrl_101) - Mapped',
         '  └─ Multi-Factor Authentication (ctrl_102) - Mapped',
-        '[ServiceNow DB UPDATE] Table [sn_risk_risk] row risk_001 -> u_ai_recommendations: [HTML audit trail written]'
+        '[ServiceNow DB UPDATE] Table [sn_risk_risk] row risk_001 -> u_ai_recommendation: [HTML audit trail written]'
       ];
     }
   } else {

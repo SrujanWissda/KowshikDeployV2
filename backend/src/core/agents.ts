@@ -4373,7 +4373,7 @@ CRITICAL RULES:
 
     const narrative = narrativeLines.join('<br>');
 
-    // 7. Write narrative back to authority document's u_ai_recommendations
+    // 7. Write narrative back to authority document's u_ai_recommendation
     const rawWriteDocSummary = (this.adapter as any).writeAuthorityDocumentSummary;
     if (typeof rawWriteDocSummary === 'function' && docSysId) {
       try {
@@ -4760,7 +4760,7 @@ Return JSON with this exact structure:
 
     const narrative = narrativeLines.join('<br>');
 
-    // 8. Write narrative to the citation's u_ai_recommendations
+    // 8. Write narrative to the citation's u_ai_recommendation
     const rawWriteCitationSummary = (this.adapter as any).writeCitationSummary;
     if (typeof rawWriteCitationSummary === 'function') {
       try {
