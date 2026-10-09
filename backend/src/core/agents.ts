@@ -369,101 +369,101 @@ export class ControlEffectivenessAgent {
       //    being written. Promise.allSettled-like behavior, but inline.
       await Promise.all(drafts.map(async (draft) => {
         try {
-        const item = draft.item;
-        const controlLevelIssues: any[] = item.evidence.openIssues || [];
-        const tests: any[] = (item.evidence as any).tests || [];
-        const testCount = tests.length;
+          const item = draft.item;
+          const controlLevelIssues: any[] = item.evidence.openIssues || [];
+          const tests: any[] = (item.evidence as any).tests || [];
+          const testCount = tests.length;
 
-        // Confidence level
-        let confidence = 'Grounded';
-        if (testCount === 0 && controlLevelIssues.length === 0) {
-          confidence = 'Estimated';
-        }
+          // Confidence level
+          let confidence = 'Grounded';
+          if (testCount === 0 && controlLevelIssues.length === 0) {
+            confidence = 'Estimated';
+          }
 
-        const formattedDate = new Date().toISOString().replace('T', ' ').substring(0, 19);
+          const formattedDate = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
-        // --- Build test detail strings ---
-        const testDetailHuman = tests.length > 0
-          ? tests.map((t: any) => `"${t.name}" (${t.number}, status: ${t.state || 'Unknown'}, effectiveness: ${t.effectiveness || 'Unknown'})`).join('; ')
-          : 'none';
+          // --- Build test detail strings ---
+          const testDetailHuman = tests.length > 0
+            ? tests.map((t: any) => `"${t.name}" (${t.number}, status: ${t.state || 'Unknown'}, effectiveness: ${t.effectiveness || 'Unknown'})`).join('; ')
+            : 'none';
 
-        const testDetailTech = testDetailHuman;
+          const testDetailTech = testDetailHuman;
 
-        // --- Build associated issues strings ---
-        const allOpenIssues: any[] = [
-          ...controlLevelIssues,
-          ...tests.flatMap((t: any) => t.openIssues || [])
-        ];
-        const issueDetailHuman = allOpenIssues.length > 0
-          ? allOpenIssues.map(i => `${i.number}: ${i.desc}`).join('; ')
-          : 'none found';
-        const issueDetailTech = issueDetailHuman;
+          // --- Build associated issues strings ---
+          const allOpenIssues: any[] = [
+            ...controlLevelIssues,
+            ...tests.flatMap((t: any) => t.openIssues || [])
+          ];
+          const issueDetailHuman = allOpenIssues.length > 0
+            ? allOpenIssues.map(i => `${i.number}: ${i.desc}`).join('; ')
+            : 'none found';
+          const issueDetailTech = issueDetailHuman;
 
-        // --- Prior assessment ---
-        const priorLine = priorInstanceSysId
-          ? `prior closed assessment ${priorInstanceSysId.number} was searched and re-evaluated because control/test data changed since then`
-          : 'no prior closed assessment found for this risk';
-        const priorLineTech = priorInstanceSysId
-          ? `sn_risk_advanced_risk_assessment_instance_response (prior closed assessment ${priorInstanceSysId.number}) and re-evaluated because control/test data changed since then`
-          : 'sn_risk_advanced_risk_assessment_instance — no prior closed assessment found for this risk';
+          // --- Prior assessment ---
+          const priorLine = priorInstanceSysId
+            ? `prior closed assessment ${priorInstanceSysId.number} was searched and re-evaluated because control/test data changed since then`
+            : 'no prior closed assessment found for this risk';
+          const priorLineTech = priorInstanceSysId
+            ? `sn_risk_advanced_risk_assessment_instance_response (prior closed assessment ${priorInstanceSysId.number}) and re-evaluated because control/test data changed since then`
+            : 'sn_risk_advanced_risk_assessment_instance — no prior closed assessment found for this risk';
 
-        // ============================================================
-        // 1. Human-readable comment → additional_comments
-        // ============================================================
-        const summary = [
-          '🔍 EMA INVESTIGATION — Control Effectiveness Assessment',
-          '',
-          `Rating: ${draft.rating}`,
-          `Confidence: ${confidence}`,
-          '',
-          'WHAT WAS INVESTIGATED:',
-          `  1. Control details — investigated the control record and found: "${item.controlName}"`,
-          `  2. Control tests — investigated the Control Tests related list on the control and found ${testCount} record${testCount !== 1 ? 's' : ''}: ${testDetailHuman}`,
-          `  3. Associated issues — investigated the Associated Issues tab on the control and found ${allOpenIssues.length} record${allOpenIssues.length !== 1 ? 's' : ''} not yet Closed Complete: ${issueDetailHuman}`,
-          `  4. Prior assessment history — ${priorLine}`,
-          '',
-          'CONCLUSION:',
-          draft.justification,
-          '',
-          `Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}`
-        ].join('\n');
+          // ============================================================
+          // 1. Human-readable comment → additional_comments
+          // ============================================================
+          const summary = [
+            '🔍 EMA INVESTIGATION — Control Effectiveness Assessment',
+            '',
+            `Rating: ${draft.rating}`,
+            `Confidence: ${confidence}`,
+            '',
+            'WHAT WAS INVESTIGATED:',
+            `  1. Control details — investigated the control record and found: "${item.controlName}"`,
+            `  2. Control tests — investigated the Control Tests related list on the control and found ${testCount} record${testCount !== 1 ? 's' : ''}: ${testDetailHuman}`,
+            `  3. Associated issues — investigated the Associated Issues tab on the control and found ${allOpenIssues.length} record${allOpenIssues.length !== 1 ? 's' : ''} not yet Closed Complete: ${issueDetailHuman}`,
+            `  4. Prior assessment history — ${priorLine}`,
+            '',
+            'CONCLUSION:',
+            draft.justification,
+            '',
+            `Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}`
+          ].join('\n');
 
-        // ============================================================
-        // 2. Technical audit trail → u_rationale_auditing_purpose (HTML rich text field)
-        // ============================================================
-        const toolsUsedLine = draft.toolCallLog && draft.toolCallLog.length > 0
-          ? `TOOLS THE AGENT CHOSE TO CALL (in order): ${draft.toolCallLog.map(c => c.name).join(' → ')}`
-          : 'TOOLS THE AGENT CHOSE TO CALL: none — finalized from the risk/control context alone';
+          // ============================================================
+          // 2. Technical audit trail → u_rationale_auditing_purpose (HTML rich text field)
+          // ============================================================
+          const toolsUsedLine = draft.toolCallLog && draft.toolCallLog.length > 0
+            ? `TOOLS THE AGENT CHOSE TO CALL (in order): ${draft.toolCallLog.map(c => c.name).join(' → ')}`
+            : 'TOOLS THE AGENT CHOSE TO CALL: none — finalized from the risk/control context alone';
 
-        const auditTrail = [
-          `🔍 EMA INVESTIGATION (TECHNICAL / AUDIT TRAIL) — Control Effectiveness Assessment`,
-          `${htmlLabel('Rating:')} ${draft.rating}<br>${htmlLabel('Confidence:')} ${confidence}`,
-          htmlEscape(toolsUsedLine),
-          htmlLabel('WHAT WAS INVESTIGATED (table-level detail):'),
-          [
-            `&nbsp;&nbsp;1. Control details — investigated sn_compliance_control (control record) and found: "${htmlEscape(item.controlName)}"`,
-            `&nbsp;&nbsp;2. Control tests — investigated sn_audit_control_test (Control Tests related list on the control) and found ${testCount} record${testCount !== 1 ? 's' : ''}: ${htmlEscape(testDetailTech)}`,
-            `&nbsp;&nbsp;3. Associated issues — investigated sn_grc_issue (Issue Management module, same records as the Associated Issues tab on the control) and found ${allOpenIssues.length} record${allOpenIssues.length !== 1 ? 's' : ''} not yet Closed Complete: ${htmlEscape(issueDetailTech)}`,
-            `&nbsp;&nbsp;4. Prior assessment history — investigated ${htmlEscape(priorLineTech)}`
-          ].join('<br>'),
-          `${htmlLabel('CONCLUSION:')}<br>${htmlEscape(draft.justification)}`,
-          `<i>Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}</i>`
-        ].join('<br><br>');
+          const auditTrail = [
+            `🔍 EMA INVESTIGATION (TECHNICAL / AUDIT TRAIL) — Control Effectiveness Assessment`,
+            `${htmlLabel('Rating:')} ${draft.rating}<br>${htmlLabel('Confidence:')} ${confidence}`,
+            htmlEscape(toolsUsedLine),
+            htmlLabel('WHAT WAS INVESTIGATED (table-level detail):'),
+            [
+              `&nbsp;&nbsp;1. Control details — investigated sn_compliance_control (control record) and found: "${htmlEscape(item.controlName)}"`,
+              `&nbsp;&nbsp;2. Control tests — investigated sn_audit_control_test (Control Tests related list on the control) and found ${testCount} record${testCount !== 1 ? 's' : ''}: ${htmlEscape(testDetailTech)}`,
+              `&nbsp;&nbsp;3. Associated issues — investigated sn_grc_issue (Issue Management module, same records as the Associated Issues tab on the control) and found ${allOpenIssues.length} record${allOpenIssues.length !== 1 ? 's' : ''} not yet Closed Complete: ${htmlEscape(issueDetailTech)}`,
+              `&nbsp;&nbsp;4. Prior assessment history — investigated ${htmlEscape(priorLineTech)}`
+            ].join('<br>'),
+            `${htmlLabel('CONCLUSION:')}<br>${htmlEscape(draft.justification)}`,
+            `<i>Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}</i>`
+          ].join('<br><br>');
 
-        const formattedJustification = this.formatText(draft.justification);
-        const verified = await writeVerified(tracer, `control ${item.controlName}`, () =>
-          this.adapter.writeControlEffectiveness(
-            item.rowSysId,
-            draft.score,
-            draft.rating,
-            formattedJustification,
-            this.formatText(summary),
-            auditTrail,
-            item.fingerprint
-          )
-        );
+          const formattedJustification = this.formatText(draft.justification);
+          const verified = await writeVerified(tracer, `control ${item.controlName}`, () =>
+            this.adapter.writeControlEffectiveness(
+              item.rowSysId,
+              draft.score,
+              draft.rating,
+              formattedJustification,
+              this.formatText(summary),
+              auditTrail,
+              item.fingerprint
+            )
+          );
 
-        results.push({ control: item.controlName, action: 'assessed', rating: draft.rating, justification: draft.justification, verified });
+          results.push({ control: item.controlName, action: 'assessed', rating: draft.rating, justification: draft.justification, verified });
         } catch (e: any) {
           const ctrlName = draft.item?.controlName || '(unknown control)';
           console.warn(`[ControlEffectivenessAgent] Write-back failed for control '${ctrlName}': ${e.message}`);
@@ -776,9 +776,9 @@ export class ControlEffectivenessAgent {
     //    all tool results come back empty, the model tends to re-nudge itself
     //    in circles until it burns through maxTurns=6 without submitting.
     // ========================================================================
-    const noTests      = !item.evidence.tests || item.evidence.tests.length === 0;
+    const noTests = !item.evidence.tests || item.evidence.tests.length === 0;
     const noOpenIssues = !item.evidence.openIssues || item.evidence.openIssues.length === 0;
-    const noPrior      = !priorInstanceSysId;
+    const noPrior = !priorInstanceSysId;
     if (noTests && noOpenIssues && noPrior) {
       // Find the WEAKEST rating in the factor's choice map = numerically lowest entry
       const entries = Object.entries(factorDetails.choiceMap);
@@ -1120,149 +1120,149 @@ export class InherentAssessmentAgent {
     //    never aborts the rest of the responses.
     await Promise.all(drafts.map(async (draft) => {
       try {
-      const factor = draft.factor;
-      const formattedDate = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      const issueCount = entityIssues.length;
+        const factor = draft.factor;
+        const formattedDate = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        const issueCount = entityIssues.length;
 
-      const directLinkedIssues = entityIssues.filter(i => (i as any).isDirectLink === true);
-      const directCount = directLinkedIssues.length;
+        const directLinkedIssues = entityIssues.filter(i => (i as any).isDirectLink === true);
+        const directCount = directLinkedIssues.length;
 
-      let confidence: string;
-      if (draft.issueRelevant && draft.relevantIssues && draft.relevantIssues.length > 0) {
-        confidence = isSalesforce ? 'Partly grounded (informed by directly linked business unit issue(s))' : 'Partly grounded (informed by directly linked issue(s))';
-      } else {
-        confidence = isSalesforce ? 'Estimated (no issues directly linked to this business unit risk)' : 'Estimated (no issues directly linked to this risk)';
-      }
+        let confidence: string;
+        if (draft.issueRelevant && draft.relevantIssues && draft.relevantIssues.length > 0) {
+          confidence = isSalesforce ? 'Partly grounded (informed by directly linked business unit issue(s))' : 'Partly grounded (informed by directly linked issue(s))';
+        } else {
+          confidence = isSalesforce ? 'Estimated (no issues directly linked to this business unit risk)' : 'Estimated (no issues directly linked to this risk)';
+        }
 
-      const riskIssueText = (!draft.relevantIssues || draft.relevantIssues.length === 0)
-        ? `found 0 unresolved issues linked directly to this risk`
-        : `found ${draft.relevantIssues.length} unresolved issue(s) linked directly to this risk: ${draft.relevantIssues.join('; ')}${draft.issueNote ? ' — ' + draft.issueNote : ''}`;
+        const riskIssueText = (!draft.relevantIssues || draft.relevantIssues.length === 0)
+          ? `found 0 unresolved issues linked directly to this risk`
+          : `found ${draft.relevantIssues.length} unresolved issue(s) linked directly to this risk: ${draft.relevantIssues.join('; ')}${draft.issueNote ? ' — ' + draft.issueNote : ''}`;
 
-      const entitySearchLabel = isSalesforce ? 'Business Unit' : 'Entity';
-      const searchTableLabel = isSalesforce ? "Business Unit's Downstream Issues related list" : "entity's Downstream Issues related list";
+        const entitySearchLabel = isSalesforce ? 'Business Unit' : 'Entity';
+        const searchTableLabel = isSalesforce ? "Business Unit's Downstream Issues related list" : "entity's Downstream Issues related list";
 
-      const toolsUsedLine = draft.toolCallLog && draft.toolCallLog.length > 0
-        ? `TOOLS THE AGENT CHOSE TO CALL (in order): ${draft.toolCallLog.map(c => c.name).join(' → ')}`
-        : 'TOOLS THE AGENT CHOSE TO CALL: none — finalized from the risk/factor context alone';
+        const toolsUsedLine = draft.toolCallLog && draft.toolCallLog.length > 0
+          ? `TOOLS THE AGENT CHOSE TO CALL (in order): ${draft.toolCallLog.map(c => c.name).join(' → ')}`
+          : 'TOOLS THE AGENT CHOSE TO CALL: none — finalized from the risk/factor context alone';
 
-      const riskQuery = encodeURIComponent(risk.name);
+        const riskQuery = encodeURIComponent(risk.name);
 
-      const factorGuidanceUrl = `/now/nav/open/table/sn_risk_advanced_factor?sys_id=${factor.factorSysId || factor.sysId}`;
+        const factorGuidanceUrl = `/now/nav/open/table/sn_risk_advanced_factor?sys_id=${factor.factorSysId || factor.sysId}`;
 
-      // Build comprehensive "WHAT WAS INVESTIGATED" with clean table labels, record metrics, guidance URL, and full URLs
-      const whatSearchedLines: string[] = [
-        `  1. Factor Guidance Rubric — investigated attached guidance rubric for "${factor.factorName}"`,
-        `  2. ${entitySearchLabel} issues — investigated the ${searchTableLabel}; found ${issueCount} unresolved ${entitySearchLabel.toLowerCase()} issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
-        `  3. Risk-Related issues — investigated the Risk's Issues related list; ${riskIssueText}`
-      ];
+        // Build comprehensive "WHAT WAS INVESTIGATED" with clean table labels, record metrics, guidance URL, and full URLs
+        const whatSearchedLines: string[] = [
+          `  1. Factor Guidance Rubric — investigated attached guidance rubric for "${factor.factorName}"`,
+          `  2. ${entitySearchLabel} issues — investigated the ${searchTableLabel}; found ${issueCount} unresolved ${entitySearchLabel.toLowerCase()} issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
+          `  3. Risk-Related issues — investigated the Risk's Issues related list; ${riskIssueText}`
+        ];
 
-      const auditSearchLines = [
-        `&nbsp;&nbsp;1. Factor Guidance Rubric — investigated <a href="${factorGuidanceUrl}" target="_blank">Factor Guidance (${htmlEscape(factor.factorName)})</a> stored in <code>sn_risk_advanced_factor</code>`,
-        `&nbsp;&nbsp;2. ${entitySearchLabel} issues — investigated <a href="/now/nav/open/table/sn_grc_m2m_issue_to_entity" target="_blank">${entitySearchLabel} Downstream Issues</a>; found ${issueCount} unresolved ${entitySearchLabel.toLowerCase()} issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
-        `&nbsp;&nbsp;3. Risk-Related issues — investigated <a href="/now/nav/open/table/sn_grc_m2m_issue_item?sysparm_query=sn_grc_item=${risk.sysId}" target="_blank">Risk Issues (M2M)</a>; ${htmlEscape(riskIssueText)}`
-      ];
+        const auditSearchLines = [
+          `&nbsp;&nbsp;1. Factor Guidance Rubric — investigated <a href="${factorGuidanceUrl}" target="_blank">Factor Guidance (${htmlEscape(factor.factorName)})</a> stored in <code>sn_risk_advanced_factor</code>`,
+          `&nbsp;&nbsp;2. ${entitySearchLabel} issues — investigated <a href="/now/nav/open/table/sn_grc_m2m_issue_to_entity" target="_blank">${entitySearchLabel} Downstream Issues</a>; found ${issueCount} unresolved ${entitySearchLabel.toLowerCase()} issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
+          `&nbsp;&nbsp;3. Risk-Related issues — investigated <a href="/now/nav/open/table/sn_grc_m2m_issue_item?sysparm_query=sn_grc_item=${risk.sysId}" target="_blank">Risk Issues (M2M)</a>; ${htmlEscape(riskIssueText)}`
+        ];
 
-      if (draft.toolCallLog && draft.toolCallLog.length > 0) {
-        let searchNumber = 4;
-        for (const toolCall of draft.toolCallLog) {
-          if (toolCall.name === 'get_financial_evidence') {
-            const fin = draft.evidenceData?.financial;
-            const eventCount = fin?.events?.length || 0;
-            const totalLoss = fin?.totalExpectedLoss || 0;
-            const lossText = totalLoss > 0 ? `found ${eventCount} relevant risk event(s) directly linked to this risk with $${totalLoss.toLocaleString()} total expected loss` : `found 0 directly linked financial loss events`;
-            whatSearchedLines.push(`  ${searchNumber}. Financial Risk Events — investigated ${this.getTableLabel('sn_risk_advanced_event')} (directly linked); ${lossText}`);
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. ${this.getTableLabel('sn_risk_advanced_event')} — investigated <a href="/now/nav/open/table/sn_risk_advanced_event" target="_blank">${this.getTableLabel('sn_risk_advanced_event')}</a> (directly linked); ${htmlEscape(lossText)}`);
-            searchNumber++;
-          }
-          if (toolCall.name === 'get_regulatory_evidence') {
-            const reg = draft.evidenceData?.regulatory;
-            const examCount = reg?.exams?.total || 0;
-            const findingCount = (reg?.issues?.formalFindings || 0) + (reg?.issues?.enforcementActions || 0);
-            const obsCount = reg?.issues?.informalObservations || 0;
-            const secSource = reg?.sources?.find((s: any) => s.name === 'SEC EDGAR');
-            const secSummary = secSource?.description || 'searched 8-K filings — 0 formal regulatory disclosures found';
-            const secUrl = secSource?.url || `https://www.sec.gov/edgar/search/#/q=${riskQuery}&forms=8-K`;
+        if (draft.toolCallLog && draft.toolCallLog.length > 0) {
+          let searchNumber = 4;
+          for (const toolCall of draft.toolCallLog) {
+            if (toolCall.name === 'get_financial_evidence') {
+              const fin = draft.evidenceData?.financial;
+              const eventCount = fin?.events?.length || 0;
+              const totalLoss = fin?.totalExpectedLoss || 0;
+              const lossText = totalLoss > 0 ? `found ${eventCount} relevant risk event(s) directly linked to this risk with $${totalLoss.toLocaleString()} total expected loss` : `found 0 directly linked financial loss events`;
+              whatSearchedLines.push(`  ${searchNumber}. Financial Risk Events — investigated ${this.getTableLabel('sn_risk_advanced_event')} (directly linked); ${lossText}`);
+              auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. ${this.getTableLabel('sn_risk_advanced_event')} — investigated <a href="/now/nav/open/table/sn_risk_advanced_event" target="_blank">${this.getTableLabel('sn_risk_advanced_event')}</a> (directly linked); ${htmlEscape(lossText)}`);
+              searchNumber++;
+            }
+            if (toolCall.name === 'get_regulatory_evidence') {
+              const reg = draft.evidenceData?.regulatory;
+              const examCount = reg?.exams?.total || 0;
+              const findingCount = (reg?.issues?.formalFindings || 0) + (reg?.issues?.enforcementActions || 0);
+              const obsCount = reg?.issues?.informalObservations || 0;
+              const secSource = reg?.sources?.find((s: any) => s.name === 'SEC EDGAR');
+              const secSummary = secSource?.description || 'searched 8-K filings — 0 formal regulatory disclosures found';
+              const secUrl = secSource?.url || `https://www.sec.gov/edgar/search/#/q=${riskQuery}&forms=8-K`;
 
-            whatSearchedLines.push(`  ${searchNumber}. Regulatory Evidence — investigated ${this.getTableLabel('sn_compliance_exam')} and ${this.getTableLabel('sn_grc_issue')} (directly linked); found ${examCount} exam(s), ${findingCount} formal finding(s)/order(s), and ${obsCount} informal observation(s)`);
-            whatSearchedLines.push(`  ${searchNumber + 1}. Regulatory Sources & URLs Impacting Rating:`);
-            whatSearchedLines.push(`     • SEC EDGAR: ${secUrl} = ${secSummary}`);
-            whatSearchedLines.push(`     • Federal Reserve: https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search = searched enforcement actions database`);
-            whatSearchedLines.push(`     • OCC: https://apps.occ.gov/EASearch = searched enforcement actions database`);
+              whatSearchedLines.push(`  ${searchNumber}. Regulatory Evidence — investigated ${this.getTableLabel('sn_compliance_exam')} and ${this.getTableLabel('sn_grc_issue')} (directly linked); found ${examCount} exam(s), ${findingCount} formal finding(s)/order(s), and ${obsCount} informal observation(s)`);
+              whatSearchedLines.push(`  ${searchNumber + 1}. Regulatory Sources & URLs Impacting Rating:`);
+              whatSearchedLines.push(`     • SEC EDGAR: ${secUrl} = ${secSummary}`);
+              whatSearchedLines.push(`     • Federal Reserve: https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search = searched enforcement actions database`);
+              whatSearchedLines.push(`     • OCC: https://apps.occ.gov/EASearch = searched enforcement actions database`);
 
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Regulatory evidence — investigated <a href="/now/nav/open/table/sn_compliance_exam" target="_blank">${this.getTableLabel('sn_compliance_exam')}</a> and <a href="/now/nav/open/table/sn_grc_issue" target="_blank">${this.getTableLabel('sn_grc_issue')}</a> (directly linked) (${examCount} exams, ${findingCount} formal findings)`);
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Regulatory URLs — <a href="${secUrl}" target="_blank">SEC EDGAR (${htmlEscape(secSummary)})</a> | <a href="https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search" target="_blank">Federal Reserve (Enforcement Database)</a> | <a href="https://apps.occ.gov/EASearch" target="_blank">OCC (Enforcement Database)</a>`);
-            searchNumber += 2;
-          }
-          if (toolCall.name === 'get_customer_evidence') {
-            const cust = draft.evidenceData?.customer;
-            const incidentCount = cust?.recordCount || 0;
-            const affected = cust?.affectedCustomers || 0;
-            whatSearchedLines.push(`  ${searchNumber}. Customer Impact — investigated ${this.getTableLabel('incident')} (directly linked); found ${incidentCount} incident(s) with ${affected.toLocaleString()} affected customer record(s)`);
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Customer impact — investigated <a href="/now/nav/open/table/incident" target="_blank">${this.getTableLabel('incident')}</a> (directly linked) (${incidentCount} incidents, ${affected} affected customers)`);
-            searchNumber++;
-          }
-          if (toolCall.name === 'get_reputational_evidence') {
-            const rep = draft.evidenceData?.reputational;
-            const eventCount = rep?.internalEvents?.total || 0;
-            const mentions = rep?.internalEvents?.totalMentions || 0;
-            const gNews = rep?.internetResults?.find((r: any) => r.name === 'Google News');
-            const gNewsSummary = gNews?.description || (gNews?.title ? `found live article: "${gNews.title}"` : `searched news articles`);
-            const gNewsUrl = gNews?.url || `https://news.google.com/search?q=${riskQuery}`;
+              auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Regulatory evidence — investigated <a href="/now/nav/open/table/sn_compliance_exam" target="_blank">${this.getTableLabel('sn_compliance_exam')}</a> and <a href="/now/nav/open/table/sn_grc_issue" target="_blank">${this.getTableLabel('sn_grc_issue')}</a> (directly linked) (${examCount} exams, ${findingCount} formal findings)`);
+              auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Regulatory URLs — <a href="${secUrl}" target="_blank">SEC EDGAR (${htmlEscape(secSummary)})</a> | <a href="https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search" target="_blank">Federal Reserve (Enforcement Database)</a> | <a href="https://apps.occ.gov/EASearch" target="_blank">OCC (Enforcement Database)</a>`);
+              searchNumber += 2;
+            }
+            if (toolCall.name === 'get_customer_evidence') {
+              const cust = draft.evidenceData?.customer;
+              const incidentCount = cust?.recordCount || 0;
+              const affected = cust?.affectedCustomers || 0;
+              whatSearchedLines.push(`  ${searchNumber}. Customer Impact — investigated ${this.getTableLabel('incident')} (directly linked); found ${incidentCount} incident(s) with ${affected.toLocaleString()} affected customer record(s)`);
+              auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Customer impact — investigated <a href="/now/nav/open/table/incident" target="_blank">${this.getTableLabel('incident')}</a> (directly linked) (${incidentCount} incidents, ${affected} affected customers)`);
+              searchNumber++;
+            }
+            if (toolCall.name === 'get_reputational_evidence') {
+              const rep = draft.evidenceData?.reputational;
+              const eventCount = rep?.internalEvents?.total || 0;
+              const mentions = rep?.internalEvents?.totalMentions || 0;
+              const gNews = rep?.internetResults?.find((r: any) => r.name === 'Google News');
+              const gNewsSummary = gNews?.description || (gNews?.title ? `found live article: "${gNews.title}"` : `searched news articles`);
+              const gNewsUrl = gNews?.url || `https://news.google.com/search?q=${riskQuery}`;
 
-            whatSearchedLines.push(`  ${searchNumber}. Reputational Evidence — investigated ${this.getTableLabel('sn_compliance_external_event')} (directly linked); found ${eventCount} event(s) with ${mentions.toLocaleString()} media mention(s)`);
-            whatSearchedLines.push(`  ${searchNumber + 1}. Internet Sources & Articles Impacting Rating:`);
-            whatSearchedLines.push(`     • Google News: ${gNewsUrl} = ${gNewsSummary}`);
-            whatSearchedLines.push(`     • Reddit: https://www.reddit.com/search/?q=${riskQuery}&sort=new = community discussion search`);
-            whatSearchedLines.push(`     • Bing News: https://www.bing.com/news/search?q=${riskQuery} = media aggregation search`);
+              whatSearchedLines.push(`  ${searchNumber}. Reputational Evidence — investigated ${this.getTableLabel('sn_compliance_external_event')} (directly linked); found ${eventCount} event(s) with ${mentions.toLocaleString()} media mention(s)`);
+              whatSearchedLines.push(`  ${searchNumber + 1}. Internet Sources & Articles Impacting Rating:`);
+              whatSearchedLines.push(`     • Google News: ${gNewsUrl} = ${gNewsSummary}`);
+              whatSearchedLines.push(`     • Reddit: https://www.reddit.com/search/?q=${riskQuery}&sort=new = community discussion search`);
+              whatSearchedLines.push(`     • Bing News: https://www.bing.com/news/search?q=${riskQuery} = media aggregation search`);
 
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Reputational events — investigated <a href="/now/nav/open/table/sn_compliance_external_event" target="_blank">${this.getTableLabel('sn_compliance_external_event')}</a> (directly linked) (${eventCount} events, ${mentions} mentions)`);
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Internet Search URLs — <a href="${gNewsUrl}" target="_blank">Google News (${htmlEscape(gNewsSummary)})</a> | <a href="https://www.reddit.com/search/?q=${riskQuery}&sort=new" target="_blank">Reddit (Discussions)</a> | <a href="https://www.bing.com/news/search?q=${riskQuery}" target="_blank">Bing News (Media Aggregation)</a>`);
-            searchNumber += 2;
+              auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Reputational events — investigated <a href="/now/nav/open/table/sn_compliance_external_event" target="_blank">${this.getTableLabel('sn_compliance_external_event')}</a> (directly linked) (${eventCount} events, ${mentions} mentions)`);
+              auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Internet Search URLs — <a href="${gNewsUrl}" target="_blank">Google News (${htmlEscape(gNewsSummary)})</a> | <a href="https://www.reddit.com/search/?q=${riskQuery}&sort=new" target="_blank">Reddit (Discussions)</a> | <a href="https://www.bing.com/news/search?q=${riskQuery}" target="_blank">Bing News (Media Aggregation)</a>`);
+              searchNumber += 2;
+            }
           }
         }
-      }
 
-      const comment = [
-        '🔍 EMA INVESTIGATION — Inherent Risk Factor Assessment',
-        '',
-        `Rating: ${draft.rating}`,
-        `Confidence: ${confidence}`,
-        '',
-        'WHAT WAS INVESTIGATED:',
-        ...whatSearchedLines,
-        '',
-        'CONCLUSION & RATIONALE:',
-        draft.justification,
-        '',
-        `Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}`
-      ].join('\n');
+        const comment = [
+          '🔍 EMA INVESTIGATION — Inherent Risk Factor Assessment',
+          '',
+          `Rating: ${draft.rating}`,
+          `Confidence: ${confidence}`,
+          '',
+          'WHAT WAS INVESTIGATED:',
+          ...whatSearchedLines,
+          '',
+          'CONCLUSION & RATIONALE:',
+          draft.justification,
+          '',
+          `Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}`
+        ].join('\n');
 
-      const auditTrail = [
-        `🔍 EMA INVESTIGATION (TECHNICAL / AUDIT TRAIL) — Inherent Risk Factor Assessment`,
-        `${htmlLabel('Rating:')} ${draft.rating}<br>${htmlLabel('Confidence:')} ${confidence}`,
-        htmlEscape(toolsUsedLine),
-        htmlLabel('WHAT WAS INVESTIGATED (table-level detail & URLs):'),
-        auditSearchLines.join('<br>'),
-        `${htmlLabel('CONCLUSION & RATIONALE:')}<br>${htmlEscape(draft.justification)}`,
-        `<i>Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}</i>`
-      ].join('<br><br>');
+        const auditTrail = [
+          `🔍 EMA INVESTIGATION (TECHNICAL / AUDIT TRAIL) — Inherent Risk Factor Assessment`,
+          `${htmlLabel('Rating:')} ${draft.rating}<br>${htmlLabel('Confidence:')} ${confidence}`,
+          htmlEscape(toolsUsedLine),
+          htmlLabel('WHAT WAS INVESTIGATED (table-level detail & URLs):'),
+          auditSearchLines.join('<br>'),
+          `${htmlLabel('CONCLUSION & RATIONALE:')}<br>${htmlEscape(draft.justification)}`,
+          `<i>Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}</i>`
+        ].join('<br><br>');
 
-      const formattedJustification = this.formatForField(
-        draft.justification,
-        'Risk__Risk_Assessment_Rating__c',
-        'Risk__Justification__c'
-      );
-      const verified = await writeVerified(tracer, `factor ${factor.factorName}`, () =>
-        this.adapter.writeInherentFactor(
-          factor.sysId,
-          draft.score,
-          draft.rating,
-          formattedJustification,
-          comment,
-          auditTrail
-        )
-      );
-      results.push({ factor: factor.factorName, rating: draft.rating, score: draft.score, justification: draft.justification, verified });
+        const formattedJustification = this.formatForField(
+          draft.justification,
+          'Risk__Risk_Assessment_Rating__c',
+          'Risk__Justification__c'
+        );
+        const verified = await writeVerified(tracer, `factor ${factor.factorName}`, () =>
+          this.adapter.writeInherentFactor(
+            factor.sysId,
+            draft.score,
+            draft.rating,
+            formattedJustification,
+            comment,
+            auditTrail
+          )
+        );
+        results.push({ factor: factor.factorName, rating: draft.rating, score: draft.score, justification: draft.justification, verified });
       } catch (e: any) {
         const factorName = draft.factor?.factorName || '(unknown factor)';
         console.warn(`[InherentAssessmentAgent] Write-back failed for factor '${factorName}': ${e.message}`);
@@ -2241,7 +2241,7 @@ export class ObligationControlObjectiveMappingAgent {
       } else {
         const draft = toEvaluate.length <= ObligationControlObjectiveMappingAgent.BATCH_SIZE
           ? await withRetry(() => this.mapObjectivesWithTools(obligation, toEvaluate, alreadyMapped, tracer), 2)
-              .then(d => d ? { ...d, coverageNote: '' } : null)
+            .then(d => d ? { ...d, coverageNote: '' } : null)
           : await this.runChunkedWithTools(obligation, toEvaluate, alreadyMapped, tracer);
 
         if (!draft) {
@@ -2792,14 +2792,14 @@ export class ObligationControlObjectiveMappingAgent {
   ) {
     const verified = newMatchesToWrite.length > 0
       ? await writeVerified(tracer, `obligation-control objective mapping for ${obligationSysId}`, () =>
-          (this.adapter as any).writeObligationControlObjectiveMapping?.(
-            obligationSysId,
-            newMatchesToWrite,
-            this.formatText(justification),
-            this.formatText(gaps),
-            this.formatText(recommendation)
-          ) ?? Promise.resolve(true)
-        )
+        (this.adapter as any).writeObligationControlObjectiveMapping?.(
+          obligationSysId,
+          newMatchesToWrite,
+          this.formatText(justification),
+          this.formatText(gaps),
+          this.formatText(recommendation)
+        ) ?? Promise.resolve(true)
+      )
       : true;
 
     const carriedCount = allMatches.length - newMatchesToWrite.length;
@@ -2949,7 +2949,7 @@ export class RiskControlMappingAgent {
       } else {
         const draft = toEvaluate.length <= RiskControlMappingAgent.BATCH_SIZE
           ? await withRetry(() => this.mapControlsWithTools(risk, toEvaluate, alreadyMapped, entityLabel, tracer), 2)
-              .then(d => d ? { ...d, coverageNote: '' } : null)
+            .then(d => d ? { ...d, coverageNote: '' } : null)
           : await this.runChunkedWithTools(risk, toEvaluate, alreadyMapped, entityLabel, tracer);
 
         if (!draft) {
@@ -2981,7 +2981,7 @@ export class RiskControlMappingAgent {
     // it AND execute() actually produced a narrative to write.
     const rawWriteSummary = (this.adapter as any).writeRiskMappingSummary;
     if (typeof rawWriteSummary === 'function' && result.details?.narrative) {
-      await writeVerified(tracer, `risk ${riskSysId} u_ai_recommendations`, () =>
+      await writeVerified(tracer, `risk ${riskSysId} u_ai_recommendation`, () =>
         rawWriteSummary.call(this.adapter, riskSysId, result.details.narrative)
       );
     }
@@ -3474,14 +3474,14 @@ export class RiskControlMappingAgent {
     // check, so re-sending them would create duplicate link rows.
     const verified = newMatchesToWrite.length > 0
       ? await writeVerified(tracer, `risk-control mapping for ${riskSysId}`, () =>
-          this.adapter.writeRiskControlMapping(
-            riskSysId,
-            newMatchesToWrite,
-            this.formatText(justification),
-            this.formatText(gaps),
-            this.formatText(recommendation)
-          )
+        this.adapter.writeRiskControlMapping(
+          riskSysId,
+          newMatchesToWrite,
+          this.formatText(justification),
+          this.formatText(gaps),
+          this.formatText(recommendation)
         )
+      )
       : true;
 
     const carriedCount = allMatches.length - newMatchesToWrite.length;
@@ -3613,7 +3613,7 @@ export class IssueIdentificationAgent {
     const getRatingOptions = (this.adapter as any).getIssueRatingOptions;
     const createIssue = (this.adapter as any).createRiskIssue;
     if (typeof resolveInstance !== 'function' || typeof hasExisting !== 'function' ||
-        typeof getContext !== 'function' || typeof getRatingOptions !== 'function' || typeof createIssue !== 'function') {
+      typeof getContext !== 'function' || typeof getRatingOptions !== 'function' || typeof createIssue !== 'function') {
       tracer.log('ERROR', { error: 'Adapter does not support issue drafting' });
       return { success: false, message: 'This platform does not support issue drafting.', details: null };
     }
@@ -3727,8 +3727,8 @@ export class IssueIdentificationAgent {
     const summary = outcome === 'skipped'
       ? `Skipped for risk "${risk.name}" — ${results.reason || 'no reason recorded'}.`
       : outcome === 'created'
-      ? `Issue created for risk "${risk.name}" (rating: ${results.rating || 'n/a'}). Action plan ${results.actionPlanTaskSysId ? 'created' : 'not created'}.`
-      : `Issue write could not be verified for risk "${risk.name}" — platform may have silently dropped a field.`;
+        ? `Issue created for risk "${risk.name}" (rating: ${results.rating || 'n/a'}). Action plan ${results.actionPlanTaskSysId ? 'created' : 'not created'}.`
+        : `Issue write could not be verified for risk "${risk.name}" — platform may have silently dropped a field.`;
     try {
       await writeTraceM.call(this.adapter, {
         agentName: 'IssueIdentificationAgent',
@@ -3962,7 +3962,7 @@ export class AuthorityDocumentCitationAgent {
   private static readonly BATCH_SIZE = 40;
   private static readonly DESC_LIMIT = 250;
 
-  constructor(private adapter: BaseGRCAdapter, private llm: BaseLLMClient) {}
+  constructor(private adapter: BaseGRCAdapter, private llm: BaseLLMClient) { }
 
   async execute(targetId: string, options?: {
     rawText?: string;
@@ -4018,7 +4018,7 @@ export class AuthorityDocumentCitationAgent {
       }
     } else {
       docDetails = await (this.adapter as any).getAuthorityDocumentDetails?.(targetId) ||
-                         await (this.adapter as any).getAuthorityDocument?.(targetId);
+        await (this.adapter as any).getAuthorityDocument?.(targetId);
       if (docDetails) {
         authorityName = docDetails.name || 'Authority Document';
         authorityRef = docDetails.number || docDetails.reference || '';
@@ -4050,7 +4050,7 @@ export class AuthorityDocumentCitationAgent {
             } else if (typeof response.data === 'object') {
               fetchedText = JSON.stringify(response.data, null, 2);
             }
-          } catch (_) {}
+          } catch (_) { }
 
           // 2. Jina AI Reader fallback (renders JS SPA pages to clean markdown)
           if (!fetchedText || fetchedText.length < 200) {
@@ -4061,7 +4061,7 @@ export class AuthorityDocumentCitationAgent {
                 fetchedText = jinaRes.data;
                 urlExtractionStatus = `Successfully fetched and converted web content via Jina Reader from URL (${documentUrl})`;
               }
-            } catch (_) {}
+            } catch (_) { }
           }
 
           if (fetchedText && fetchedText.length > 100) {
@@ -4090,7 +4090,7 @@ export class AuthorityDocumentCitationAgent {
 
     // 2. Fetch existing library obligations for duplicate detection & stale reporting (FEM-RD-05, FEM-RD-09)
     const existingObligations = await (this.adapter as any).getAllObligations?.() || [];
-    
+
     // Check for previous version delta (FEM-RD-06)
     let previousVersion: any = null;
     if (options?.previousVersionDocSysId) {
@@ -4327,15 +4327,15 @@ CRITICAL RULES:
           const dupTag = o.duplicate_status === 'exact_duplicate'
             ? ` <span style="color:#6f42c1;"><b>[LINKED EXISTING]</b></span>`
             : o.duplicate_status === 'near_duplicate'
-            ? ` <span style="color:#fd7e14;"><b>[NEAR-DUPLICATE]</b></span>`
-            : '';
+              ? ` <span style="color:#fd7e14;"><b>[NEAR-DUPLICATE]</b></span>`
+              : '';
 
           return `• <strong>${htmlEscape(o.proposed_name)}</strong>${dupTag} — ${appTag}<br>` +
-                 `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Citation Hierarchy:</strong> <code>${htmlEscape(o.citation_reference)}</code><br>` +
-                 `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Atomic Duty:</strong> <em>${htmlEscape(o.duty)}</em><br>` +
-                 `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Suggested Date / Source:</strong> ${o.document_url || documentUrl ? htmlEscape(o.document_url || documentUrl) : `<span style="color:#d97706;">Suggested as Today (${todayDate})</span>`}<br>` +
-                 `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Applicability Rationale:</strong> ${htmlEscape(o.applicability_rationale)}` +
-                 (o.change_rationale ? `<br>&nbsp;&nbsp;&nbsp;&nbsp;<strong>Change Note:</strong> ${htmlEscape(o.change_rationale)}` : '');
+            `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Citation Hierarchy:</strong> <code>${htmlEscape(o.citation_reference)}</code><br>` +
+            `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Atomic Duty:</strong> <em>${htmlEscape(o.duty)}</em><br>` +
+            `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Suggested Date / Source:</strong> ${o.document_url || documentUrl ? htmlEscape(o.document_url || documentUrl) : `<span style="color:#d97706;">Suggested as Today (${todayDate})</span>`}<br>` +
+            `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Applicability Rationale:</strong> ${htmlEscape(o.applicability_rationale)}` +
+            (o.change_rationale ? `<br>&nbsp;&nbsp;&nbsp;&nbsp;<strong>Change Note:</strong> ${htmlEscape(o.change_rationale)}` : '');
         }).join('<br><br>')
       );
     }
@@ -4377,11 +4377,11 @@ CRITICAL RULES:
     const rawWriteDocSummary = (this.adapter as any).writeAuthorityDocumentSummary;
     if (typeof rawWriteDocSummary === 'function' && docSysId) {
       try {
-        await writeVerified(tracer, `authority document ${docSysId} u_ai_recommendations`, () =>
+        await writeVerified(tracer, `authority document ${docSysId} u_ai_recommendation`, () =>
           rawWriteDocSummary.call(this.adapter, docSysId, narrative)
         );
       } catch (err: any) {
-        tracer.log('WARN', { error: `Failed writing u_ai_recommendations on authority document: ${err.message}` });
+        tracer.log('WARN', { error: `Failed writing u_ai_recommendation on authority document: ${err.message}` });
       }
     }
 
@@ -4454,7 +4454,7 @@ CRITICAL RULES:
 export class CitationRiskMappingAgent {
   private static readonly OVER_MAPPING_THRESHOLD = 4;
 
-  constructor(private adapter: BaseGRCAdapter, private llm: BaseLLMClient) {}
+  constructor(private adapter: BaseGRCAdapter, private llm: BaseLLMClient) { }
 
   async execute(citationSysId: string): Promise<{
     success: boolean;
@@ -4764,11 +4764,11 @@ Return JSON with this exact structure:
     const rawWriteCitationSummary = (this.adapter as any).writeCitationSummary;
     if (typeof rawWriteCitationSummary === 'function') {
       try {
-        await writeVerified(tracer, `citation ${citationSysId} u_ai_recommendations`, () =>
+        await writeVerified(tracer, `citation ${citationSysId} u_ai_recommendation`, () =>
           rawWriteCitationSummary.call(this.adapter, citationSysId, narrative)
         );
       } catch (err: any) {
-        tracer.log('WARN', { error: `Failed writing u_ai_recommendations on citation: ${err.message}` });
+        tracer.log('WARN', { error: `Failed writing u_ai_recommendation on citation: ${err.message}` });
       }
     }
 
