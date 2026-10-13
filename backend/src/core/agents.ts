@@ -109,7 +109,7 @@ async function writeVerified(tracer: AgentTracer, label: string, write: () => Pr
 // Shared HTML formatting for rich-text ServiceNow fields
 //
 // Confirmed live via sys_dictionary: u_rationale_auditing_purpose,
-// u_ai_recommendation, and u_issue_summarize_ema are `html` type — the only
+// u_ai_recommendations, and u_issue_summarize_ema are `html` type — the only
 // three fields any agent writes into that can render markup at all.
 // additional_comments, inherent_justification, control_justification,
 // residual_justification, and the GRC task/issue `description` fields are
@@ -369,101 +369,101 @@ export class ControlEffectivenessAgent {
       //    being written. Promise.allSettled-like behavior, but inline.
       await Promise.all(drafts.map(async (draft) => {
         try {
-        const item = draft.item;
-        const controlLevelIssues: any[] = item.evidence.openIssues || [];
-        const tests: any[] = (item.evidence as any).tests || [];
-        const testCount = tests.length;
+          const item = draft.item;
+          const controlLevelIssues: any[] = item.evidence.openIssues || [];
+          const tests: any[] = (item.evidence as any).tests || [];
+          const testCount = tests.length;
 
-        // Confidence level
-        let confidence = 'Grounded';
-        if (testCount === 0 && controlLevelIssues.length === 0) {
-          confidence = 'Estimated';
-        }
+          // Confidence level
+          let confidence = 'Grounded';
+          if (testCount === 0 && controlLevelIssues.length === 0) {
+            confidence = 'Estimated';
+          }
 
-        const formattedDate = new Date().toISOString().replace('T', ' ').substring(0, 19);
+          const formattedDate = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
-        // --- Build test detail strings ---
-        const testDetailHuman = tests.length > 0
-          ? tests.map((t: any) => `"${t.name}" (${t.number}, status: ${t.state || 'Unknown'}, effectiveness: ${t.effectiveness || 'Unknown'})`).join('; ')
-          : 'none';
+          // --- Build test detail strings ---
+          const testDetailHuman = tests.length > 0
+            ? tests.map((t: any) => `"${t.name}" (${t.number}, status: ${t.state || 'Unknown'}, effectiveness: ${t.effectiveness || 'Unknown'})`).join('; ')
+            : 'none';
 
-        const testDetailTech = testDetailHuman;
+          const testDetailTech = testDetailHuman;
 
-        // --- Build associated issues strings ---
-        const allOpenIssues: any[] = [
-          ...controlLevelIssues,
-          ...tests.flatMap((t: any) => t.openIssues || [])
-        ];
-        const issueDetailHuman = allOpenIssues.length > 0
-          ? allOpenIssues.map(i => `${i.number}: ${i.desc}`).join('; ')
-          : 'none found';
-        const issueDetailTech = issueDetailHuman;
+          // --- Build associated issues strings ---
+          const allOpenIssues: any[] = [
+            ...controlLevelIssues,
+            ...tests.flatMap((t: any) => t.openIssues || [])
+          ];
+          const issueDetailHuman = allOpenIssues.length > 0
+            ? allOpenIssues.map(i => `${i.number}: ${i.desc}`).join('; ')
+            : 'none found';
+          const issueDetailTech = issueDetailHuman;
 
-        // --- Prior assessment ---
-        const priorLine = priorInstanceSysId
-          ? `prior closed assessment ${priorInstanceSysId.number} was searched and re-evaluated because control/test data changed since then`
-          : 'no prior closed assessment found for this risk';
-        const priorLineTech = priorInstanceSysId
-          ? `sn_risk_advanced_risk_assessment_instance_response (prior closed assessment ${priorInstanceSysId.number}) and re-evaluated because control/test data changed since then`
-          : 'sn_risk_advanced_risk_assessment_instance — no prior closed assessment found for this risk';
+          // --- Prior assessment ---
+          const priorLine = priorInstanceSysId
+            ? `prior closed assessment ${priorInstanceSysId.number} was searched and re-evaluated because control/test data changed since then`
+            : 'no prior closed assessment found for this risk';
+          const priorLineTech = priorInstanceSysId
+            ? `sn_risk_advanced_risk_assessment_instance_response (prior closed assessment ${priorInstanceSysId.number}) and re-evaluated because control/test data changed since then`
+            : 'sn_risk_advanced_risk_assessment_instance — no prior closed assessment found for this risk';
 
-        // ============================================================
-        // 1. Human-readable comment → additional_comments
-        // ============================================================
-        const summary = [
-          '🔍 EMA INVESTIGATION — Control Effectiveness Assessment',
-          '',
-          `Rating: ${draft.rating}`,
-          `Confidence: ${confidence}`,
-          '',
-          'WHAT WAS INVESTIGATED:',
-          `  1. Control details — investigated the control record and found: "${item.controlName}"`,
-          `  2. Control tests — investigated the Control Tests related list on the control and found ${testCount} record${testCount !== 1 ? 's' : ''}: ${testDetailHuman}`,
-          `  3. Associated issues — investigated the Associated Issues tab on the control and found ${allOpenIssues.length} record${allOpenIssues.length !== 1 ? 's' : ''} not yet Closed Complete: ${issueDetailHuman}`,
-          `  4. Prior assessment history — ${priorLine}`,
-          '',
-          'CONCLUSION:',
-          draft.justification,
-          '',
-          `Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}`
-        ].join('\n');
+          // ============================================================
+          // 1. Human-readable comment → additional_comments
+          // ============================================================
+          const summary = [
+            '🔍 EMA INVESTIGATION — Control Effectiveness Assessment',
+            '',
+            `Rating: ${draft.rating}`,
+            `Confidence: ${confidence}`,
+            '',
+            'WHAT WAS INVESTIGATED:',
+            `  1. Control details — investigated the control record and found: "${item.controlName}"`,
+            `  2. Control tests — investigated the Control Tests related list on the control and found ${testCount} record${testCount !== 1 ? 's' : ''}: ${testDetailHuman}`,
+            `  3. Associated issues — investigated the Associated Issues tab on the control and found ${allOpenIssues.length} record${allOpenIssues.length !== 1 ? 's' : ''} not yet Closed Complete: ${issueDetailHuman}`,
+            `  4. Prior assessment history — ${priorLine}`,
+            '',
+            'CONCLUSION:',
+            draft.justification,
+            '',
+            `Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}`
+          ].join('\n');
 
-        // ============================================================
-        // 2. Technical audit trail → u_rationale_auditing_purpose (HTML rich text field)
-        // ============================================================
-        const toolsUsedLine = draft.toolCallLog && draft.toolCallLog.length > 0
-          ? `TOOLS THE AGENT CHOSE TO CALL (in order): ${draft.toolCallLog.map(c => c.name).join(' → ')}`
-          : 'TOOLS THE AGENT CHOSE TO CALL: none — finalized from the risk/control context alone';
+          // ============================================================
+          // 2. Technical audit trail → u_rationale_auditing_purpose (HTML rich text field)
+          // ============================================================
+          const toolsUsedLine = draft.toolCallLog && draft.toolCallLog.length > 0
+            ? `TOOLS THE AGENT CHOSE TO CALL (in order): ${draft.toolCallLog.map(c => c.name).join(' → ')}`
+            : 'TOOLS THE AGENT CHOSE TO CALL: none — finalized from the risk/control context alone';
 
-        const auditTrail = [
-          `🔍 EMA INVESTIGATION (TECHNICAL / AUDIT TRAIL) — Control Effectiveness Assessment`,
-          `${htmlLabel('Rating:')} ${draft.rating}<br>${htmlLabel('Confidence:')} ${confidence}`,
-          htmlEscape(toolsUsedLine),
-          htmlLabel('WHAT WAS INVESTIGATED (table-level detail):'),
-          [
-            `&nbsp;&nbsp;1. Control details — investigated sn_compliance_control (control record) and found: "${htmlEscape(item.controlName)}"`,
-            `&nbsp;&nbsp;2. Control tests — investigated sn_audit_control_test (Control Tests related list on the control) and found ${testCount} record${testCount !== 1 ? 's' : ''}: ${htmlEscape(testDetailTech)}`,
-            `&nbsp;&nbsp;3. Associated issues — investigated sn_grc_issue (Issue Management module, same records as the Associated Issues tab on the control) and found ${allOpenIssues.length} record${allOpenIssues.length !== 1 ? 's' : ''} not yet Closed Complete: ${htmlEscape(issueDetailTech)}`,
-            `&nbsp;&nbsp;4. Prior assessment history — investigated ${htmlEscape(priorLineTech)}`
-          ].join('<br>'),
-          `${htmlLabel('CONCLUSION:')}<br>${htmlEscape(draft.justification)}`,
-          `<i>Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}</i>`
-        ].join('<br><br>');
+          const auditTrail = [
+            `🔍 EMA INVESTIGATION (TECHNICAL / AUDIT TRAIL) — Control Effectiveness Assessment`,
+            `${htmlLabel('Rating:')} ${draft.rating}<br>${htmlLabel('Confidence:')} ${confidence}`,
+            htmlEscape(toolsUsedLine),
+            htmlLabel('WHAT WAS INVESTIGATED (table-level detail):'),
+            [
+              `&nbsp;&nbsp;1. Control details — investigated sn_compliance_control (control record) and found: "${htmlEscape(item.controlName)}"`,
+              `&nbsp;&nbsp;2. Control tests — investigated sn_audit_control_test (Control Tests related list on the control) and found ${testCount} record${testCount !== 1 ? 's' : ''}: ${htmlEscape(testDetailTech)}`,
+              `&nbsp;&nbsp;3. Associated issues — investigated sn_grc_issue (Issue Management module, same records as the Associated Issues tab on the control) and found ${allOpenIssues.length} record${allOpenIssues.length !== 1 ? 's' : ''} not yet Closed Complete: ${htmlEscape(issueDetailTech)}`,
+              `&nbsp;&nbsp;4. Prior assessment history — investigated ${htmlEscape(priorLineTech)}`
+            ].join('<br>'),
+            `${htmlLabel('CONCLUSION:')}<br>${htmlEscape(draft.justification)}`,
+            `<i>Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}</i>`
+          ].join('<br><br>');
 
-        const formattedJustification = this.formatText(draft.justification);
-        const verified = await writeVerified(tracer, `control ${item.controlName}`, () =>
-          this.adapter.writeControlEffectiveness(
-            item.rowSysId,
-            draft.score,
-            draft.rating,
-            formattedJustification,
-            this.formatText(summary),
-            auditTrail,
-            item.fingerprint
-          )
-        );
+          const formattedJustification = this.formatText(draft.justification);
+          const verified = await writeVerified(tracer, `control ${item.controlName}`, () =>
+            this.adapter.writeControlEffectiveness(
+              item.rowSysId,
+              draft.score,
+              draft.rating,
+              formattedJustification,
+              this.formatText(summary),
+              auditTrail,
+              item.fingerprint
+            )
+          );
 
-        results.push({ control: item.controlName, action: 'assessed', rating: draft.rating, justification: draft.justification, verified });
+          results.push({ control: item.controlName, action: 'assessed', rating: draft.rating, justification: draft.justification, verified });
         } catch (e: any) {
           const ctrlName = draft.item?.controlName || '(unknown control)';
           console.warn(`[ControlEffectivenessAgent] Write-back failed for control '${ctrlName}': ${e.message}`);
@@ -776,9 +776,9 @@ export class ControlEffectivenessAgent {
     //    all tool results come back empty, the model tends to re-nudge itself
     //    in circles until it burns through maxTurns=6 without submitting.
     // ========================================================================
-    const noTests      = !item.evidence.tests || item.evidence.tests.length === 0;
+    const noTests = !item.evidence.tests || item.evidence.tests.length === 0;
     const noOpenIssues = !item.evidence.openIssues || item.evidence.openIssues.length === 0;
-    const noPrior      = !priorInstanceSysId;
+    const noPrior = !priorInstanceSysId;
     if (noTests && noOpenIssues && noPrior) {
       // Find the WEAKEST rating in the factor's choice map = numerically lowest entry
       const entries = Object.entries(factorDetails.choiceMap);
@@ -1120,149 +1120,149 @@ export class InherentAssessmentAgent {
     //    never aborts the rest of the responses.
     await Promise.all(drafts.map(async (draft) => {
       try {
-      const factor = draft.factor;
-      const formattedDate = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      const issueCount = entityIssues.length;
+        const factor = draft.factor;
+        const formattedDate = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        const issueCount = entityIssues.length;
 
-      const directLinkedIssues = entityIssues.filter(i => (i as any).isDirectLink === true);
-      const directCount = directLinkedIssues.length;
+        const directLinkedIssues = entityIssues.filter(i => (i as any).isDirectLink === true);
+        const directCount = directLinkedIssues.length;
 
-      let confidence: string;
-      if (draft.issueRelevant && draft.relevantIssues && draft.relevantIssues.length > 0) {
-        confidence = isSalesforce ? 'Partly grounded (informed by directly linked business unit issue(s))' : 'Partly grounded (informed by directly linked issue(s))';
-      } else {
-        confidence = isSalesforce ? 'Estimated (no issues directly linked to this business unit risk)' : 'Estimated (no issues directly linked to this risk)';
-      }
+        let confidence: string;
+        if (draft.issueRelevant && draft.relevantIssues && draft.relevantIssues.length > 0) {
+          confidence = isSalesforce ? 'Partly grounded (informed by directly linked business unit issue(s))' : 'Partly grounded (informed by directly linked issue(s))';
+        } else {
+          confidence = isSalesforce ? 'Estimated (no issues directly linked to this business unit risk)' : 'Estimated (no issues directly linked to this risk)';
+        }
 
-      const riskIssueText = (!draft.relevantIssues || draft.relevantIssues.length === 0)
-        ? `found 0 unresolved issues linked directly to this risk`
-        : `found ${draft.relevantIssues.length} unresolved issue(s) linked directly to this risk: ${draft.relevantIssues.join('; ')}${draft.issueNote ? ' — ' + draft.issueNote : ''}`;
+        const riskIssueText = (!draft.relevantIssues || draft.relevantIssues.length === 0)
+          ? `found 0 unresolved issues linked directly to this risk`
+          : `found ${draft.relevantIssues.length} unresolved issue(s) linked directly to this risk: ${draft.relevantIssues.join('; ')}${draft.issueNote ? ' — ' + draft.issueNote : ''}`;
 
-      const entitySearchLabel = isSalesforce ? 'Business Unit' : 'Entity';
-      const searchTableLabel = isSalesforce ? "Business Unit's Downstream Issues related list" : "entity's Downstream Issues related list";
+        const entitySearchLabel = isSalesforce ? 'Business Unit' : 'Entity';
+        const searchTableLabel = isSalesforce ? "Business Unit's Downstream Issues related list" : "entity's Downstream Issues related list";
 
-      const toolsUsedLine = draft.toolCallLog && draft.toolCallLog.length > 0
-        ? `TOOLS THE AGENT CHOSE TO CALL (in order): ${draft.toolCallLog.map(c => c.name).join(' → ')}`
-        : 'TOOLS THE AGENT CHOSE TO CALL: none — finalized from the risk/factor context alone';
+        const toolsUsedLine = draft.toolCallLog && draft.toolCallLog.length > 0
+          ? `TOOLS THE AGENT CHOSE TO CALL (in order): ${draft.toolCallLog.map(c => c.name).join(' → ')}`
+          : 'TOOLS THE AGENT CHOSE TO CALL: none — finalized from the risk/factor context alone';
 
-      const riskQuery = encodeURIComponent(risk.name);
+        const riskQuery = encodeURIComponent(risk.name);
 
-      const factorGuidanceUrl = `/now/nav/open/table/sn_risk_advanced_factor?sys_id=${factor.factorSysId || factor.sysId}`;
+        const factorGuidanceUrl = `/now/nav/open/table/sn_risk_advanced_factor?sys_id=${factor.factorSysId || factor.sysId}`;
 
-      // Build comprehensive "WHAT WAS INVESTIGATED" with clean table labels, record metrics, guidance URL, and full URLs
-      const whatSearchedLines: string[] = [
-        `  1. Factor Guidance Rubric — investigated attached guidance rubric for "${factor.factorName}"`,
-        `  2. ${entitySearchLabel} issues — investigated the ${searchTableLabel}; found ${issueCount} unresolved ${entitySearchLabel.toLowerCase()} issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
-        `  3. Risk-Related issues — investigated the Risk's Issues related list; ${riskIssueText}`
-      ];
+        // Build comprehensive "WHAT WAS INVESTIGATED" with clean table labels, record metrics, guidance URL, and full URLs
+        const whatSearchedLines: string[] = [
+          `  1. Factor Guidance Rubric — investigated attached guidance rubric for "${factor.factorName}"`,
+          `  2. ${entitySearchLabel} issues — investigated the ${searchTableLabel}; found ${issueCount} unresolved ${entitySearchLabel.toLowerCase()} issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
+          `  3. Risk-Related issues — investigated the Risk's Issues related list; ${riskIssueText}`
+        ];
 
-      const auditSearchLines = [
-        `&nbsp;&nbsp;1. Factor Guidance Rubric — investigated <a href="${factorGuidanceUrl}" target="_blank">Factor Guidance (${htmlEscape(factor.factorName)})</a> stored in <code>sn_risk_advanced_factor</code>`,
-        `&nbsp;&nbsp;2. ${entitySearchLabel} issues — investigated <a href="/now/nav/open/table/sn_grc_m2m_issue_to_entity" target="_blank">${entitySearchLabel} Downstream Issues</a>; found ${issueCount} unresolved ${entitySearchLabel.toLowerCase()} issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
-        `&nbsp;&nbsp;3. Risk-Related issues — investigated <a href="/now/nav/open/table/sn_grc_m2m_issue_item?sysparm_query=sn_grc_item=${risk.sysId}" target="_blank">Risk Issues (M2M)</a>; ${htmlEscape(riskIssueText)}`
-      ];
+        const auditSearchLines = [
+          `&nbsp;&nbsp;1. Factor Guidance Rubric — investigated <a href="${factorGuidanceUrl}" target="_blank">Factor Guidance (${htmlEscape(factor.factorName)})</a> stored in <code>sn_risk_advanced_factor</code>`,
+          `&nbsp;&nbsp;2. ${entitySearchLabel} issues — investigated <a href="/now/nav/open/table/sn_grc_m2m_issue_to_entity" target="_blank">${entitySearchLabel} Downstream Issues</a>; found ${issueCount} unresolved ${entitySearchLabel.toLowerCase()} issue${issueCount !== 1 ? 's' : ''} not Closed Complete`,
+          `&nbsp;&nbsp;3. Risk-Related issues — investigated <a href="/now/nav/open/table/sn_grc_m2m_issue_item?sysparm_query=sn_grc_item=${risk.sysId}" target="_blank">Risk Issues (M2M)</a>; ${htmlEscape(riskIssueText)}`
+        ];
 
-      if (draft.toolCallLog && draft.toolCallLog.length > 0) {
-        let searchNumber = 4;
-        for (const toolCall of draft.toolCallLog) {
-          if (toolCall.name === 'get_financial_evidence') {
-            const fin = draft.evidenceData?.financial;
-            const eventCount = fin?.events?.length || 0;
-            const totalLoss = fin?.totalExpectedLoss || 0;
-            const lossText = totalLoss > 0 ? `found ${eventCount} relevant risk event(s) directly linked to this risk with $${totalLoss.toLocaleString()} total expected loss` : `found 0 directly linked financial loss events`;
-            whatSearchedLines.push(`  ${searchNumber}. Financial Risk Events — investigated ${this.getTableLabel('sn_risk_advanced_event')} (directly linked); ${lossText}`);
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. ${this.getTableLabel('sn_risk_advanced_event')} — investigated <a href="/now/nav/open/table/sn_risk_advanced_event" target="_blank">${this.getTableLabel('sn_risk_advanced_event')}</a> (directly linked); ${htmlEscape(lossText)}`);
-            searchNumber++;
-          }
-          if (toolCall.name === 'get_regulatory_evidence') {
-            const reg = draft.evidenceData?.regulatory;
-            const examCount = reg?.exams?.total || 0;
-            const findingCount = (reg?.issues?.formalFindings || 0) + (reg?.issues?.enforcementActions || 0);
-            const obsCount = reg?.issues?.informalObservations || 0;
-            const secSource = reg?.sources?.find((s: any) => s.name === 'SEC EDGAR');
-            const secSummary = secSource?.description || 'searched 8-K filings — 0 formal regulatory disclosures found';
-            const secUrl = secSource?.url || `https://www.sec.gov/edgar/search/#/q=${riskQuery}&forms=8-K`;
+        if (draft.toolCallLog && draft.toolCallLog.length > 0) {
+          let searchNumber = 4;
+          for (const toolCall of draft.toolCallLog) {
+            if (toolCall.name === 'get_financial_evidence') {
+              const fin = draft.evidenceData?.financial;
+              const eventCount = fin?.events?.length || 0;
+              const totalLoss = fin?.totalExpectedLoss || 0;
+              const lossText = totalLoss > 0 ? `found ${eventCount} relevant risk event(s) directly linked to this risk with $${totalLoss.toLocaleString()} total expected loss` : `found 0 directly linked financial loss events`;
+              whatSearchedLines.push(`  ${searchNumber}. Financial Risk Events — investigated ${this.getTableLabel('sn_risk_advanced_event')} (directly linked); ${lossText}`);
+              auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. ${this.getTableLabel('sn_risk_advanced_event')} — investigated <a href="/now/nav/open/table/sn_risk_advanced_event" target="_blank">${this.getTableLabel('sn_risk_advanced_event')}</a> (directly linked); ${htmlEscape(lossText)}`);
+              searchNumber++;
+            }
+            if (toolCall.name === 'get_regulatory_evidence') {
+              const reg = draft.evidenceData?.regulatory;
+              const examCount = reg?.exams?.total || 0;
+              const findingCount = (reg?.issues?.formalFindings || 0) + (reg?.issues?.enforcementActions || 0);
+              const obsCount = reg?.issues?.informalObservations || 0;
+              const secSource = reg?.sources?.find((s: any) => s.name === 'SEC EDGAR');
+              const secSummary = secSource?.description || 'searched 8-K filings — 0 formal regulatory disclosures found';
+              const secUrl = secSource?.url || `https://www.sec.gov/edgar/search/#/q=${riskQuery}&forms=8-K`;
 
-            whatSearchedLines.push(`  ${searchNumber}. Regulatory Evidence — investigated ${this.getTableLabel('sn_compliance_exam')} and ${this.getTableLabel('sn_grc_issue')} (directly linked); found ${examCount} exam(s), ${findingCount} formal finding(s)/order(s), and ${obsCount} informal observation(s)`);
-            whatSearchedLines.push(`  ${searchNumber + 1}. Regulatory Sources & URLs Impacting Rating:`);
-            whatSearchedLines.push(`     • SEC EDGAR: ${secUrl} = ${secSummary}`);
-            whatSearchedLines.push(`     • Federal Reserve: https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search = searched enforcement actions database`);
-            whatSearchedLines.push(`     • OCC: https://apps.occ.gov/EASearch = searched enforcement actions database`);
+              whatSearchedLines.push(`  ${searchNumber}. Regulatory Evidence — investigated ${this.getTableLabel('sn_compliance_exam')} and ${this.getTableLabel('sn_grc_issue')} (directly linked); found ${examCount} exam(s), ${findingCount} formal finding(s)/order(s), and ${obsCount} informal observation(s)`);
+              whatSearchedLines.push(`  ${searchNumber + 1}. Regulatory Sources & URLs Impacting Rating:`);
+              whatSearchedLines.push(`     • SEC EDGAR: ${secUrl} = ${secSummary}`);
+              whatSearchedLines.push(`     • Federal Reserve: https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search = searched enforcement actions database`);
+              whatSearchedLines.push(`     • OCC: https://apps.occ.gov/EASearch = searched enforcement actions database`);
 
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Regulatory evidence — investigated <a href="/now/nav/open/table/sn_compliance_exam" target="_blank">${this.getTableLabel('sn_compliance_exam')}</a> and <a href="/now/nav/open/table/sn_grc_issue" target="_blank">${this.getTableLabel('sn_grc_issue')}</a> (directly linked) (${examCount} exams, ${findingCount} formal findings)`);
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Regulatory URLs — <a href="${secUrl}" target="_blank">SEC EDGAR (${htmlEscape(secSummary)})</a> | <a href="https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search" target="_blank">Federal Reserve (Enforcement Database)</a> | <a href="https://apps.occ.gov/EASearch" target="_blank">OCC (Enforcement Database)</a>`);
-            searchNumber += 2;
-          }
-          if (toolCall.name === 'get_customer_evidence') {
-            const cust = draft.evidenceData?.customer;
-            const incidentCount = cust?.recordCount || 0;
-            const affected = cust?.affectedCustomers || 0;
-            whatSearchedLines.push(`  ${searchNumber}. Customer Impact — investigated ${this.getTableLabel('incident')} (directly linked); found ${incidentCount} incident(s) with ${affected.toLocaleString()} affected customer record(s)`);
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Customer impact — investigated <a href="/now/nav/open/table/incident" target="_blank">${this.getTableLabel('incident')}</a> (directly linked) (${incidentCount} incidents, ${affected} affected customers)`);
-            searchNumber++;
-          }
-          if (toolCall.name === 'get_reputational_evidence') {
-            const rep = draft.evidenceData?.reputational;
-            const eventCount = rep?.internalEvents?.total || 0;
-            const mentions = rep?.internalEvents?.totalMentions || 0;
-            const gNews = rep?.internetResults?.find((r: any) => r.name === 'Google News');
-            const gNewsSummary = gNews?.description || (gNews?.title ? `found live article: "${gNews.title}"` : `searched news articles`);
-            const gNewsUrl = gNews?.url || `https://news.google.com/search?q=${riskQuery}`;
+              auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Regulatory evidence — investigated <a href="/now/nav/open/table/sn_compliance_exam" target="_blank">${this.getTableLabel('sn_compliance_exam')}</a> and <a href="/now/nav/open/table/sn_grc_issue" target="_blank">${this.getTableLabel('sn_grc_issue')}</a> (directly linked) (${examCount} exams, ${findingCount} formal findings)`);
+              auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Regulatory URLs — <a href="${secUrl}" target="_blank">SEC EDGAR (${htmlEscape(secSummary)})</a> | <a href="https://www.federalreserve.gov/apps/enforcementactions/enforcementactions/search" target="_blank">Federal Reserve (Enforcement Database)</a> | <a href="https://apps.occ.gov/EASearch" target="_blank">OCC (Enforcement Database)</a>`);
+              searchNumber += 2;
+            }
+            if (toolCall.name === 'get_customer_evidence') {
+              const cust = draft.evidenceData?.customer;
+              const incidentCount = cust?.recordCount || 0;
+              const affected = cust?.affectedCustomers || 0;
+              whatSearchedLines.push(`  ${searchNumber}. Customer Impact — investigated ${this.getTableLabel('incident')} (directly linked); found ${incidentCount} incident(s) with ${affected.toLocaleString()} affected customer record(s)`);
+              auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Customer impact — investigated <a href="/now/nav/open/table/incident" target="_blank">${this.getTableLabel('incident')}</a> (directly linked) (${incidentCount} incidents, ${affected} affected customers)`);
+              searchNumber++;
+            }
+            if (toolCall.name === 'get_reputational_evidence') {
+              const rep = draft.evidenceData?.reputational;
+              const eventCount = rep?.internalEvents?.total || 0;
+              const mentions = rep?.internalEvents?.totalMentions || 0;
+              const gNews = rep?.internetResults?.find((r: any) => r.name === 'Google News');
+              const gNewsSummary = gNews?.description || (gNews?.title ? `found live article: "${gNews.title}"` : `searched news articles`);
+              const gNewsUrl = gNews?.url || `https://news.google.com/search?q=${riskQuery}`;
 
-            whatSearchedLines.push(`  ${searchNumber}. Reputational Evidence — investigated ${this.getTableLabel('sn_compliance_external_event')} (directly linked); found ${eventCount} event(s) with ${mentions.toLocaleString()} media mention(s)`);
-            whatSearchedLines.push(`  ${searchNumber + 1}. Internet Sources & Articles Impacting Rating:`);
-            whatSearchedLines.push(`     • Google News: ${gNewsUrl} = ${gNewsSummary}`);
-            whatSearchedLines.push(`     • Reddit: https://www.reddit.com/search/?q=${riskQuery}&sort=new = community discussion search`);
-            whatSearchedLines.push(`     • Bing News: https://www.bing.com/news/search?q=${riskQuery} = media aggregation search`);
+              whatSearchedLines.push(`  ${searchNumber}. Reputational Evidence — investigated ${this.getTableLabel('sn_compliance_external_event')} (directly linked); found ${eventCount} event(s) with ${mentions.toLocaleString()} media mention(s)`);
+              whatSearchedLines.push(`  ${searchNumber + 1}. Internet Sources & Articles Impacting Rating:`);
+              whatSearchedLines.push(`     • Google News: ${gNewsUrl} = ${gNewsSummary}`);
+              whatSearchedLines.push(`     • Reddit: https://www.reddit.com/search/?q=${riskQuery}&sort=new = community discussion search`);
+              whatSearchedLines.push(`     • Bing News: https://www.bing.com/news/search?q=${riskQuery} = media aggregation search`);
 
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Reputational events — investigated <a href="/now/nav/open/table/sn_compliance_external_event" target="_blank">${this.getTableLabel('sn_compliance_external_event')}</a> (directly linked) (${eventCount} events, ${mentions} mentions)`);
-            auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Internet Search URLs — <a href="${gNewsUrl}" target="_blank">Google News (${htmlEscape(gNewsSummary)})</a> | <a href="https://www.reddit.com/search/?q=${riskQuery}&sort=new" target="_blank">Reddit (Discussions)</a> | <a href="https://www.bing.com/news/search?q=${riskQuery}" target="_blank">Bing News (Media Aggregation)</a>`);
-            searchNumber += 2;
+              auditSearchLines.push(`&nbsp;&nbsp;${searchNumber}. Reputational events — investigated <a href="/now/nav/open/table/sn_compliance_external_event" target="_blank">${this.getTableLabel('sn_compliance_external_event')}</a> (directly linked) (${eventCount} events, ${mentions} mentions)`);
+              auditSearchLines.push(`&nbsp;&nbsp;${searchNumber + 1}. Internet Search URLs — <a href="${gNewsUrl}" target="_blank">Google News (${htmlEscape(gNewsSummary)})</a> | <a href="https://www.reddit.com/search/?q=${riskQuery}&sort=new" target="_blank">Reddit (Discussions)</a> | <a href="https://www.bing.com/news/search?q=${riskQuery}" target="_blank">Bing News (Media Aggregation)</a>`);
+              searchNumber += 2;
+            }
           }
         }
-      }
 
-      const comment = [
-        '🔍 EMA INVESTIGATION — Inherent Risk Factor Assessment',
-        '',
-        `Rating: ${draft.rating}`,
-        `Confidence: ${confidence}`,
-        '',
-        'WHAT WAS INVESTIGATED:',
-        ...whatSearchedLines,
-        '',
-        'CONCLUSION & RATIONALE:',
-        draft.justification,
-        '',
-        `Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}`
-      ].join('\n');
+        const comment = [
+          '🔍 EMA INVESTIGATION — Inherent Risk Factor Assessment',
+          '',
+          `Rating: ${draft.rating}`,
+          `Confidence: ${confidence}`,
+          '',
+          'WHAT WAS INVESTIGATED:',
+          ...whatSearchedLines,
+          '',
+          'CONCLUSION & RATIONALE:',
+          draft.justification,
+          '',
+          `Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}`
+        ].join('\n');
 
-      const auditTrail = [
-        `🔍 EMA INVESTIGATION (TECHNICAL / AUDIT TRAIL) — Inherent Risk Factor Assessment`,
-        `${htmlLabel('Rating:')} ${draft.rating}<br>${htmlLabel('Confidence:')} ${confidence}`,
-        htmlEscape(toolsUsedLine),
-        htmlLabel('WHAT WAS INVESTIGATED (table-level detail & URLs):'),
-        auditSearchLines.join('<br>'),
-        `${htmlLabel('CONCLUSION & RATIONALE:')}<br>${htmlEscape(draft.justification)}`,
-        `<i>Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}</i>`
-      ].join('<br><br>');
+        const auditTrail = [
+          `🔍 EMA INVESTIGATION (TECHNICAL / AUDIT TRAIL) — Inherent Risk Factor Assessment`,
+          `${htmlLabel('Rating:')} ${draft.rating}<br>${htmlLabel('Confidence:')} ${confidence}`,
+          htmlEscape(toolsUsedLine),
+          htmlLabel('WHAT WAS INVESTIGATED (table-level detail & URLs):'),
+          auditSearchLines.join('<br>'),
+          `${htmlLabel('CONCLUSION & RATIONALE:')}<br>${htmlEscape(draft.justification)}`,
+          `<i>Model: gemini-3.5-flash (Ema) · Assessed: ${formattedDate}</i>`
+        ].join('<br><br>');
 
-      const formattedJustification = this.formatForField(
-        draft.justification,
-        'Risk__Risk_Assessment_Rating__c',
-        'Risk__Justification__c'
-      );
-      const verified = await writeVerified(tracer, `factor ${factor.factorName}`, () =>
-        this.adapter.writeInherentFactor(
-          factor.sysId,
-          draft.score,
-          draft.rating,
-          formattedJustification,
-          comment,
-          auditTrail
-        )
-      );
-      results.push({ factor: factor.factorName, rating: draft.rating, score: draft.score, justification: draft.justification, verified });
+        const formattedJustification = this.formatForField(
+          draft.justification,
+          'Risk__Risk_Assessment_Rating__c',
+          'Risk__Justification__c'
+        );
+        const verified = await writeVerified(tracer, `factor ${factor.factorName}`, () =>
+          this.adapter.writeInherentFactor(
+            factor.sysId,
+            draft.score,
+            draft.rating,
+            formattedJustification,
+            comment,
+            auditTrail
+          )
+        );
+        results.push({ factor: factor.factorName, rating: draft.rating, score: draft.score, justification: draft.justification, verified });
       } catch (e: any) {
         const factorName = draft.factor?.factorName || '(unknown factor)';
         console.warn(`[InherentAssessmentAgent] Write-back failed for factor '${factorName}': ${e.message}`);
@@ -2167,6 +2167,705 @@ Respond ONLY with valid JSON (no markdown):
 }
 
 // ============================================================================
+// 3. Obligation → Control Objective Mapping Agent
+// ============================================================================
+// Mirrors RiskControlMappingAgent exactly, but maps an Obligation (sn_compliance_citation)
+// to Control Objectives (sn_compliance_policy_statement) instead of Controls.
+// Same tool-calling loop → self-critique → verified write pattern.
+// ============================================================================
+type ResolvedObjective = { sysId: string; name: string; category: string; reason: string };
+
+export class ObligationControlObjectiveMappingAgent {
+  private static readonly BATCH_SIZE = 40;
+  private static readonly DESC_LIMIT = 250;
+  private static readonly OBL_DESC_LIMIT = 600;
+  private terminology: { [key: string]: string } | null;
+
+  constructor(private adapter: BaseGRCAdapter, private llm: BaseLLMClient) {
+    this.terminology = this.adapter.getTerminology() || null;
+  }
+
+  private formatText(text: string, maxChars = 32768): string {
+    if (!text) return text;
+    let result = text;
+    if (this.terminology) {
+      for (const [from, to] of Object.entries(this.terminology)) {
+        const regex = new RegExp(`\\b${from}\\b`, 'gi');
+        result = result.replace(regex, (match) =>
+          match[0] === match[0].toUpperCase() ? to.charAt(0).toUpperCase() + to.slice(1) : to
+        );
+      }
+    }
+    if (result.length > maxChars) {
+      const truncated = result.substring(0, maxChars);
+      const lastSpace = truncated.lastIndexOf(' ');
+      return lastSpace > 0 ? truncated.substring(0, lastSpace) : truncated;
+    }
+    return result;
+  }
+
+  async execute(obligationSysId: string): Promise<{ success: boolean; message: string; details: any }> {
+    const tracer = new AgentTracer();
+    tracer.log('START', { obligationSysId });
+
+    // 1. Fetch the obligation record from sn_compliance_citation
+    const obligation = await (this.adapter as any).getObligation?.(obligationSysId);
+    if (!obligation) {
+      tracer.log('ERROR', { error: 'Obligation not found' });
+      return { success: false, message: 'Obligation not found', details: null };
+    }
+    tracer.log('INFO', { obligationName: obligation.name, reference: obligation.reference });
+
+    // 2. Fetch all control objectives from sn_compliance_policy_statement
+    const objectives = await (this.adapter as any).getAllControlObjectives?.() || [];
+    tracer.log('INFO', { objectivesCount: objectives.length });
+
+    let result: { success: boolean; message: string; details: any };
+
+    if (objectives.length === 0) {
+      result = await this.suggestNewObjectives(obligation, tracer);
+    } else {
+      // Memory-reuse: skip objectives already linked to this obligation
+      const getExisting = (this.adapter as any).getExistingObligationControlObjectiveMappings;
+      let alreadyMappedIds = new Set<string>();
+      if (typeof getExisting === 'function') {
+        const existing = await getExisting.call(this.adapter, obligationSysId);
+        if (existing) alreadyMappedIds = existing;
+      }
+      const alreadyMapped = objectives.filter((o: any) => alreadyMappedIds.has(o.sysId));
+      const toEvaluate = objectives.filter((o: any) => !alreadyMappedIds.has(o.sysId));
+      tracer.log('INFO', { alreadyMappedCount: alreadyMapped.length, toEvaluateCount: toEvaluate.length });
+
+      if (toEvaluate.length === 0) {
+        result = this.finishAlreadyMapped(obligation, objectives.length, alreadyMapped);
+      } else {
+        const draft = toEvaluate.length <= ObligationControlObjectiveMappingAgent.BATCH_SIZE
+          ? await withRetry(() => this.mapObjectivesWithTools(obligation, toEvaluate, alreadyMapped, tracer), 2)
+            .then(d => d ? { ...d, coverageNote: '' } : null)
+          : await this.runChunkedWithTools(obligation, toEvaluate, alreadyMapped, tracer);
+
+        if (!draft) {
+          result = { success: false, message: 'AI evaluation failed for all objective batches — please retry.', details: null };
+        } else {
+          const critiqued = await this.critiqueMappingDecisions(obligation, draft.matches, draft.rejected, tracer);
+
+          const carriedMatches: ResolvedObjective[] = alreadyMapped.map((o: any) => ({
+            sysId: o.sysId, name: o.name, category: o.category || 'General',
+            reason: 'Already mapped to this obligation from a previous run — no changes needed.'
+          }));
+          const allMatches = this.dedupeBySysId([...carriedMatches, ...critiqued.matches]);
+
+          result = allMatches.length === 0
+            ? await this.finishNoMatch(obligation, obligationSysId, objectives.length, critiqued.rejected, draft.justification, draft.gaps, draft.recommendation, tracer, draft.coverageNote)
+            : await this.finishMatched(obligation, obligationSysId, objectives.length, allMatches, critiqued.matches, critiqued.rejected, draft.justification, draft.gaps, draft.recommendation, tracer, draft.coverageNote);
+        }
+      }
+    }
+
+    // Optional narrative on the obligation record
+    const rawWriteSummary = (this.adapter as any).writeObligationMappingSummary;
+    if (typeof rawWriteSummary === 'function' && result.details?.narrative) {
+      await writeVerified(tracer, `obligation ${obligationSysId} u_ai_recommendations`, () =>
+        rawWriteSummary.call(this.adapter, obligationSysId, result.details.narrative)
+      );
+    }
+
+    // Observability trace
+    const outcome = result.success ? 'mapped' : 'failed';
+    tracer.log('END', { outcome });
+    const writeTraceM = (this.adapter as any).writeObservabilityTrace;
+    if (typeof writeTraceM === 'function') {
+      try {
+        await writeTraceM.call(this.adapter, {
+          agentName: 'Obligation-ControlObjectiveAgent',
+          targetId: obligationSysId,
+          citationSysId: obligationSysId,
+          outcome,
+          results: result.details,
+          html: tracer.renderHtml('Obligation-ControlObjectiveAgent', obligation.name || obligationSysId),
+          summary: result.message
+        });
+      } catch (_) { /* observability is best-effort */ }
+    }
+
+    return result;
+  }
+
+  private obligationBlock(obligation: any): string {
+    return [
+      'OBLIGATION:',
+      `Name: ${obligation.name}`,
+      `Reference: ${obligation.reference || 'N/A'}`,
+      `Description: ${(obligation.description || 'No description provided.').substring(0, ObligationControlObjectiveMappingAgent.OBL_DESC_LIMIT)}`
+    ].join('\n');
+  }
+
+  private objectiveListBlock(objectives: any[]): string {
+    const limit = ObligationControlObjectiveMappingAgent.DESC_LIMIT;
+    return objectives.map((o, idx) =>
+      `[${idx + 1}] Name: ${o.name} | Category: ${o.category || 'General'} | Desc: ${(o.description || 'No description').substring(0, limit)}`
+    ).join('\n');
+  }
+
+  private resolveAgainst(raw: Array<{ index: number; reason: string }> | undefined, pool: any[]): ResolvedObjective[] {
+    return (raw || [])
+      .map(r => {
+        const obj = pool[r.index - 1];
+        return obj ? { sysId: obj.sysId, name: obj.name, category: obj.category || 'General', reason: r.reason } : null;
+      })
+      .filter((m): m is ResolvedObjective => m !== null);
+  }
+
+  private unmentionedRejections(pool: any[], matches: Array<{ index: number }>, rejected: Array<{ index: number }>): ResolvedObjective[] {
+    const mentioned = new Set([...matches.map(m => m.index), ...rejected.map(r => r.index)]);
+    return pool
+      .map((obj, idx) => ({ obj, idx: idx + 1 }))
+      .filter(({ idx }) => !mentioned.has(idx))
+      .map(({ obj }) => ({ sysId: obj.sysId, name: obj.name, category: obj.category || 'General', reason: 'Not evaluated as directly satisfying this obligation.' }));
+  }
+
+  private dedupeBySysId(matches: ResolvedObjective[]): ResolvedObjective[] {
+    const seen = new Set<string>();
+    return matches.filter(m => (seen.has(m.sysId) ? false : (seen.add(m.sysId), true)));
+  }
+
+  private alreadyMappedBlock(alreadyMapped: any[]): string {
+    if (alreadyMapped.length === 0) return '';
+    return [
+      '',
+      'ALREADY MAPPED (context only — already linked to this obligation from a previous run, do NOT re-decide these,',
+      'but factor them into your gap analysis):',
+      alreadyMapped.map((o: any) => `- ${o.name}`).join('\n')
+    ].join('\n');
+  }
+
+  private buildMappingTools(obligation: any, pool: any[]): { tools: ToolDeclaration[]; executeTool: (name: string, args: any) => Promise<any> } {
+    const tools: ToolDeclaration[] = [
+      {
+        name: 'get_obligation_full_description',
+        description: 'Get the full text of the obligation being mapped.',
+        parameters: { type: 'OBJECT', properties: {}, required: [] }
+      },
+      {
+        name: 'get_objective_full_description',
+        description: 'Get the full name, category, and description of a specific control objective by its 1-based index.',
+        parameters: {
+          type: 'OBJECT',
+          properties: { index: { type: 'INTEGER', description: '1-based index into the candidate control objective list.' } },
+          required: ['index']
+        }
+      }
+    ];
+
+    const executeTool = async (name: string, args: any): Promise<any> => {
+      switch (name) {
+        case 'get_obligation_full_description':
+          return { name: obligation.name, reference: obligation.reference, description: obligation.description || 'No description provided.' };
+        case 'get_objective_full_description': {
+          const obj = pool[(args?.index || 0) - 1];
+          if (!obj) return { error: 'Invalid index' };
+          return { name: obj.name, category: obj.category || 'General', description: obj.description || 'No description provided.' };
+        }
+        default:
+          return { error: `Unknown tool: ${name}` };
+      }
+    };
+
+    return { tools, executeTool };
+  }
+
+  // ── Single-shot path ──────────────────────────────────────────────────────
+  private async mapObjectivesWithTools(
+    obligation: any, pool: any[], alreadyMapped: any[], tracer: AgentTracer
+  ): Promise<{ matches: ResolvedObjective[]; rejected: ResolvedObjective[]; justification: string; gaps: string; recommendation: string } | null> {
+    const { tools, executeTool } = this.buildMappingTools(obligation, pool);
+
+    tools.push({
+      name: 'submit_mapping',
+      description: 'Finalize your control objective mapping decision once you have gathered enough evidence.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          matches: {
+            type: 'ARRAY',
+            description: 'Control objectives that satisfy this obligation.',
+            items: {
+              type: 'OBJECT',
+              properties: { index: { type: 'INTEGER' }, reason: { type: 'STRING' } },
+              required: ['index', 'reason']
+            }
+          },
+          rejected: {
+            type: 'ARRAY',
+            description: 'Control objectives evaluated but not mapping to this obligation.',
+            items: {
+              type: 'OBJECT',
+              properties: { index: { type: 'INTEGER' }, reason: { type: 'STRING' } },
+              required: ['index', 'reason']
+            }
+          },
+          overall_justification: { type: 'STRING', description: '2-3 sentences on the theme of matched objectives.' },
+          gaps: { type: 'STRING', description: 'Aspects of the obligation not addressed by any matched objective.' },
+          recommendation: { type: 'STRING', description: 'New control objectives to create, if gaps exist.' }
+        },
+        required: ['matches', 'rejected', 'overall_justification', 'gaps']
+      }
+    });
+
+    const initialPrompt = [
+      this.obligationBlock(obligation),
+      this.alreadyMappedBlock(alreadyMapped),
+      '',
+      `CANDIDATE CONTROL OBJECTIVES (${pool.length} total — evaluate all):`,
+      this.objectiveListBlock(pool),
+      '',
+      'TASK: Determine which control objectives, if implemented, would directly satisfy or contribute to this obligation.',
+      'Call get_obligation_full_description and get_objective_full_description(index) as needed to read full details.',
+      'Then call submit_mapping with your final decision.',
+      '',
+      'CRITERIA:',
+      '- MATCH: The objective, when achieved, demonstrably addresses the enforceable duty in the obligation.',
+      '- REJECT: The objective is unrelated or only tangentially relevant to the specific obligation.',
+      '- For every rejected objective explain WHY it does not address the obligation\'s specific duty.'
+    ].join('\n');
+
+    const systemInstruction = `You are Ema, a GRC Compliance mapping architect. You map regulatory obligations to control objectives. Investigate before you conclude: read the obligation and objective details via tools, then call submit_mapping. For every rejected objective, explain why it does not satisfy the specific duty of this obligation.`;
+
+    tracer.log('REQUEST', { path: 'singleShot', prompt_preview: initialPrompt });
+
+    const loop = await this.llm.runToolLoop<{
+      matches: Array<{ index: number; reason: string }>;
+      rejected: Array<{ index: number; reason: string }>;
+      overall_justification: string;
+      gaps: string;
+      recommendation?: string;
+    }>(systemInstruction, initialPrompt, tools, 'submit_mapping', executeTool, 6);
+
+    if (!loop) {
+      tracer.log('ERROR', { path: 'singleShot', error: 'tool loop did not finalize' });
+      return null;
+    }
+
+    tracer.log('RESPONSE', { path: 'singleShot', matchesCount: loop.result.matches?.length || 0, rejectedCount: loop.result.rejected?.length || 0 });
+
+    return {
+      matches: this.dedupeBySysId(this.resolveAgainst(loop.result.matches, pool)),
+      rejected: [
+        ...this.resolveAgainst(loop.result.rejected, pool),
+        ...this.unmentionedRejections(pool, loop.result.matches, loop.result.rejected || [])
+      ],
+      justification: loop.result.overall_justification || '',
+      gaps: loop.result.gaps || '',
+      recommendation: loop.result.recommendation || ''
+    };
+  }
+
+  // ── One chunked batch ─────────────────────────────────────────────────────
+  private async mapObjectivesBatchWithTools(
+    obligation: any, chunk: any[], alreadyMapped: any[], chunkIndex: number, chunksTotal: number, tracer: AgentTracer
+  ): Promise<{ matches: ResolvedObjective[]; rejected: ResolvedObjective[] } | null> {
+    const prompt = [
+      this.obligationBlock(obligation),
+      this.alreadyMappedBlock(alreadyMapped),
+      '',
+      `CANDIDATE CONTROL OBJECTIVES — Batch ${chunkIndex} of ${chunksTotal}:`,
+      this.objectiveListBlock(chunk),
+      '',
+      'TASK: Evaluate each candidate control objective against the obligation.',
+      'Determine which objectives, if implemented, directly satisfy or contribute to this obligation.',
+      'For MATCHES: provide a clear rationale.',
+      'For REJECTED: explain why it does not satisfy the obligation\'s specific duty.',
+      '',
+      'Respond ONLY with valid JSON, no markdown:',
+      '{"matches": [{"index": 1, "reason": "..."}], "rejected": [{"index": 2, "reason": "..."}]}'
+    ].join('\n');
+
+    const schema = {
+      type: 'OBJECT',
+      properties: {
+        matches: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: { index: { type: 'INTEGER' }, reason: { type: 'STRING' } },
+            required: ['index', 'reason']
+          }
+        },
+        rejected: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: { index: { type: 'INTEGER' }, reason: { type: 'STRING' } },
+            required: ['index', 'reason']
+          }
+        }
+      },
+      required: ['matches', 'rejected']
+    };
+
+    tracer.log('REQUEST', { path: 'chunked_batch', batchIndex: chunkIndex, prompt_preview: prompt });
+
+    try {
+      const res = await this.llm.generateStructuredOutput<{
+        matches: Array<{ index: number; reason: string }>;
+        rejected: Array<{ index: number; reason: string }>;
+      }>(
+        prompt,
+        'You are Ema, a GRC Compliance mapping architect reviewing candidate control objectives against an obligation.',
+        schema
+      );
+
+      tracer.log('RESPONSE', { path: 'chunked_batch', batchIndex: chunkIndex, matchesCount: res.matches?.length || 0, rejectedCount: res.rejected?.length || 0 });
+
+      return {
+        matches: this.resolveAgainst(res.matches, chunk),
+        rejected: [...this.resolveAgainst(res.rejected, chunk), ...this.unmentionedRejections(chunk, res.matches || [], res.rejected || [])]
+      };
+    } catch (e: any) {
+      tracer.log('ERROR', { path: 'chunked_batch', batchIndex: chunkIndex, error: e.message });
+      return null;
+    }
+  }
+
+  // ── Chunked path ──────────────────────────────────────────────────────────
+  private async runChunkedWithTools(
+    obligation: any, objectives: any[], alreadyMapped: any[], tracer: AgentTracer
+  ): Promise<{ matches: ResolvedObjective[]; rejected: ResolvedObjective[]; justification: string; gaps: string; recommendation: string; coverageNote: string } | null> {
+    const batchSize = ObligationControlObjectiveMappingAgent.BATCH_SIZE;
+    const chunksTotal = Math.ceil(objectives.length / batchSize);
+    const indexedChunks: Array<{ chunk: any[]; index: number }> = [];
+    for (let i = 0; i < objectives.length; i += batchSize) {
+      indexedChunks.push({ chunk: objectives.slice(i, i + batchSize), index: indexedChunks.length + 1 });
+    }
+
+    const batchResults = await runInParallelBatches(indexedChunks, 20, async ({ chunk, index }) =>
+      withRetry(() => this.mapObjectivesBatchWithTools(obligation, chunk, alreadyMapped, index, chunksTotal, tracer), 2)
+    );
+
+    let allMatches: ResolvedObjective[] = [];
+    let allRejected: ResolvedObjective[] = [];
+    let chunksOk = 0;
+    for (const res of batchResults) {
+      const resAny = res as any;
+      if (!res || !resAny || resAny.success === false || !('matches' in resAny)) {
+        console.warn(`[ObligationControlObjectiveMappingAgent] Skipping batch chunk: ${resAny?.error || 'no result'}`);
+        continue;
+      }
+      chunksOk++;
+      allMatches.push(...resAny.matches);
+      allRejected.push(...resAny.rejected);
+    }
+
+    if (chunksOk === 0) return null;
+    allMatches = this.dedupeBySysId(allMatches);
+    const coverageNote = chunksOk < chunksTotal
+      ? `Note: only ${chunksOk} of ${chunksTotal} objective batches were evaluated — re-run to complete coverage.`
+      : '';
+
+    // Consolidation call
+    let justification = '', gaps = '', recommendation = '';
+    try {
+      const matchedList = [
+        ...alreadyMapped.map((o: any) => `- ${o.name} (already mapped from a previous run)`),
+        ...allMatches.map(m => `- ${m.name} (${m.reason})`)
+      ];
+      const consPrompt = [
+        this.obligationBlock(obligation),
+        '',
+        'MATCHED CONTROL OBJECTIVES (selected across all batches, plus any already mapped):',
+        matchedList.length > 0 ? matchedList.join('\n') : '(none — no existing objective matched)',
+        '',
+        'TASK:',
+        '1. overall_justification: 2-3 sentences on the common theme across matched objectives.',
+        '2. gaps: 2-4 sentences on aspects of the obligation NOT covered by matched objectives.',
+        '3. recommendation: only if gaps exist — objectives to create. Empty string otherwise.'
+      ].join('\n');
+      const consSchema = {
+        type: 'OBJECT',
+        properties: { overall_justification: { type: 'STRING' }, gaps: { type: 'STRING' }, recommendation: { type: 'STRING' } },
+        required: ['overall_justification', 'gaps']
+      };
+      tracer.log('REQUEST', { path: 'consolidation', prompt_preview: consPrompt });
+      const cons = await this.llm.generateStructuredOutput<{ overall_justification: string; gaps: string; recommendation?: string }>(consPrompt, 'You are a GRC Compliance mapping architect writing a consolidated obligation-objective summary.', consSchema);
+      tracer.log('RESPONSE', { path: 'consolidation', status: 'completed' });
+      justification = cons.overall_justification || '';
+      gaps = cons.gaps || '';
+      recommendation = cons.recommendation || '';
+    } catch (e: any) {
+      tracer.log('ERROR', { path: 'consolidation', error: e.message });
+    }
+
+    return { matches: allMatches, rejected: allRejected, justification, gaps, recommendation, coverageNote };
+  }
+
+  // ── Pass 2: self-critique ─────────────────────────────────────────────────
+  private async critiqueMappingDecisions(
+    obligation: any, matches: ResolvedObjective[], rejected: ResolvedObjective[], tracer: AgentTracer
+  ): Promise<{ matches: ResolvedObjective[]; rejected: ResolvedObjective[] }> {
+    type Decision = ResolvedObjective & { decision: 'match' | 'reject' };
+    const allDecisions: Decision[] = [
+      ...matches.map(m => ({ ...m, decision: 'match' as const })),
+      ...rejected.map(r => ({ ...r, decision: 'reject' as const }))
+    ];
+    if (allDecisions.length === 0) return { matches, rejected };
+
+    const critiqueChunkSize = 8;
+    const chunks: Decision[][] = [];
+    for (let i = 0; i < allDecisions.length; i += critiqueChunkSize) {
+      chunks.push(allDecisions.slice(i, i + critiqueChunkSize));
+    }
+
+    const flips = new Map<string, { decision: 'match' | 'reject'; note: string }>();
+
+    await Promise.all(chunks.map(async chunk => {
+      const blocks = chunk.map((d, idx) =>
+        `[${idx + 1}] OBJECTIVE: ${d.name} (${d.category})\n    CURRENT DECISION: ${d.decision === 'match' ? 'MAPPED' : 'REJECTED'}\n    REASON: ${d.reason}`
+      ).join('\n\n');
+
+      const prompt = [
+        'You are Ema, now reviewing your own draft obligation-control objective mapping decisions as a second, independent pass.',
+        'For each objective below, a first pass already decided whether it maps to this obligation and why.',
+        'Check whether that decision actually follows from the obligation and objective shown.',
+        '',
+        `OBLIGATION: ${obligation.name}`,
+        `Description: ${(obligation.description || 'No description provided.').substring(0, ObligationControlObjectiveMappingAgent.OBL_DESC_LIMIT)}`,
+        '',
+        blocks,
+        '',
+        'For each objective: if the decision is well-supported, respond action="confirm". If it is not, respond',
+        'action="flip" and explain in "note" specifically what the first pass got wrong.',
+        '',
+        'Respond ONLY with valid JSON, no markdown:',
+        '{"reviews": [{"index": 1, "action": "confirm", "note": ""}, ...]}'
+      ].join('\n');
+
+      const schema = {
+        type: 'OBJECT',
+        properties: {
+          reviews: {
+            type: 'ARRAY',
+            items: {
+              type: 'OBJECT',
+              properties: { index: { type: 'INTEGER' }, action: { type: 'STRING' }, note: { type: 'STRING' } },
+              required: ['index', 'action']
+            }
+          }
+        },
+        required: ['reviews']
+      };
+
+      tracer.log('REQUEST', { phase: 'critique', prompt_preview: prompt });
+
+      try {
+        const response = await this.llm.generateStructuredOutput<{ reviews: Array<{ index: number; action: string; note?: string }> }>(
+          prompt, 'You are Ema, acting as an independent second reviewer of draft obligation-control objective mapping decisions.', schema
+        );
+        tracer.log('RESPONSE', { phase: 'critique', status: 'completed', reviews: response.reviews });
+        for (const review of response.reviews || []) {
+          const d = chunk[review.index - 1];
+          if (!d || review.action !== 'flip') continue;
+          flips.set(d.sysId, { decision: d.decision === 'match' ? 'reject' : 'match', note: review.note || 'decision did not hold up on review.' });
+        }
+      } catch (e: any) {
+        tracer.log('ERROR', { phase: 'critique', error: e.message });
+      }
+    }));
+
+    if (flips.size === 0) return { matches, rejected };
+
+    const annotate = (r: ResolvedObjective, note: string): ResolvedObjective => ({ ...r, reason: `${r.reason}\n\n🔁 Revised on second-pass review: ${note}` });
+
+    const finalMatches = [
+      ...matches.filter(m => !flips.has(m.sysId)),
+      ...rejected.filter(r => flips.get(r.sysId)?.decision === 'match').map(r => annotate(r, flips.get(r.sysId)!.note))
+    ];
+    const finalRejected = [
+      ...rejected.filter(r => !flips.has(r.sysId)),
+      ...matches.filter(m => flips.get(m.sysId)?.decision === 'reject').map(m => annotate(m, flips.get(m.sysId)!.note))
+    ];
+
+    return { matches: finalMatches, rejected: finalRejected };
+  }
+
+  // ── All objectives already linked ────────────────────────────────────────
+  private finishAlreadyMapped(obligation: any, totalObjectives: number, alreadyMapped: any[]) {
+    const matches: ResolvedObjective[] = alreadyMapped.map((o: any) => ({
+      sysId: o.sysId, name: o.name, category: o.category || 'General',
+      reason: 'Already mapped to this obligation from a previous run — no changes needed.'
+    }));
+
+    const narrative = [
+      `${htmlLabel('SUMMARY:')} All ${alreadyMapped.length} candidate control objective(s) are already mapped to this obligation from a previous run.`,
+      `No new objectives to evaluate — nothing was re-decided or re-written.`
+    ].join('<br><br>');
+
+    return {
+      success: true,
+      message: `All ${alreadyMapped.length} control objective(s) already mapped — nothing new to evaluate.`,
+      details: {
+        totalObjectivesEvaluated: totalObjectives,
+        matches,
+        rejected: [],
+        justification: 'All candidate control objectives were already mapped to this obligation from a previous run.',
+        gaps: '',
+        recommendations: '',
+        narrative
+      }
+    };
+  }
+
+  // ── No objectives exist at all ────────────────────────────────────────────
+  private async suggestNewObjectives(obligation: any, tracer: AgentTracer) {
+    const prompt = [
+      `You are a GRC compliance expert. No control objectives exist yet for this obligation.`,
+      '',
+      this.obligationBlock(obligation),
+      '',
+      'TASK: Suggest 2-4 control objectives to create to satisfy this obligation. Each needs a concise name,',
+      'a category (e.g. Data Protection, Access Control, Audit & Accountability), and a 1-2 sentence description.',
+      'Also provide a 2-3 sentence explanation of why these objectives together address the obligation.'
+    ].join('\n');
+
+    const schema = {
+      type: 'OBJECT',
+      properties: {
+        suggested_objectives: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              name: { type: 'STRING' },
+              category: { type: 'STRING' },
+              description: { type: 'STRING' }
+            },
+            required: ['name', 'description']
+          }
+        },
+        explanation: { type: 'STRING' }
+      },
+      required: ['suggested_objectives', 'explanation']
+    };
+
+    tracer.log('REQUEST', { path: 'suggestNewObjectives', prompt_preview: prompt });
+
+    const response = await this.llm.generateStructuredOutput<{ suggested_objectives: Array<{ name: string; category?: string; description: string }>; explanation: string }>(
+      prompt, 'You are a GRC expert recommending new control objectives where a library gap exists.', schema
+    );
+
+    const suggestions = response.suggested_objectives || [];
+    tracer.log('RESPONSE', { path: 'suggestNewObjectives', suggestionsCount: suggestions.length });
+
+    await writeVerified(tracer, `obligation-control objective mapping (no existing objectives) for ${obligation.sysId || ''}`, () =>
+      (this.adapter as any).writeObligationControlObjectiveMapping?.(
+        obligation.sysId || obligation.sys_id,
+        [],
+        'No control objectives currently exist in the library for this obligation.',
+        `No control objectives exist in the library to cover obligation: ${obligation.name}.`,
+        suggestions.map((s: any) => `${s.name}: ${s.description}`).join('\n')
+      ) ?? Promise.resolve(true)
+    );
+
+    const narrative = [
+      `${htmlLabel('SUMMARY:')} No control objectives exist in the library for obligation "${htmlEscape(obligation.name)}".`,
+      `${htmlLabel('SUGGESTED OBJECTIVES TO CREATE:')}<br>${suggestions.map((c: any) => htmlChoiceLine(c.name, c.description, true)).join('<br>')}`,
+      `${htmlLabel('WHY THESE OBJECTIVES:')}<br>${htmlEscape(response.explanation || 'Not provided')}`
+    ].join('<br><br>');
+
+    return {
+      success: true,
+      message: `No control objectives available — suggested ${suggestions.length} new objective(s)`,
+      details: {
+        totalObjectivesEvaluated: 0,
+        matches: [],
+        rejected: [],
+        suggestedObjectives: suggestions,
+        explanation: response.explanation,
+        narrative
+      }
+    };
+  }
+
+  private async finishMatched(
+    obligation: any, obligationSysId: string, totalObjectives: number,
+    allMatches: ResolvedObjective[], newMatchesToWrite: ResolvedObjective[], rejected: ResolvedObjective[],
+    justification: string, gaps: string, recommendation: string, tracer: AgentTracer, coverageNote: string = ''
+  ) {
+    const verified = newMatchesToWrite.length > 0
+      ? await writeVerified(tracer, `obligation-control objective mapping for ${obligationSysId}`, () =>
+        (this.adapter as any).writeObligationControlObjectiveMapping?.(
+          obligationSysId,
+          newMatchesToWrite,
+          this.formatText(justification),
+          this.formatText(gaps),
+          this.formatText(recommendation)
+        ) ?? Promise.resolve(true)
+      )
+      : true;
+
+    const carriedCount = allMatches.length - newMatchesToWrite.length;
+    const narrative = [
+      `${htmlLabel('SUMMARY:')} Mapped ${allMatches.length} control objective(s) to this obligation${carriedCount > 0 ? ` (${carriedCount} already mapped from a previous run, ${newMatchesToWrite.length} newly added)` : ''}. Rejected ${rejected.length} objective(s).`,
+      `${htmlLabel('RATIONALE — why these were picked and why others were rejected:')}<br>${htmlEscape(justification || 'Not provided')}`,
+      `${htmlLabel('GAPS — aspects of the obligation not covered by existing objectives:')}<br>${htmlEscape(gaps || 'None identified')}`,
+      ...(coverageNote ? [htmlEscape(coverageNote)] : [])
+    ].join('<br><br>');
+
+    return {
+      success: true,
+      message: `Mapped ${allMatches.length} control objective(s) to obligation (${newMatchesToWrite.length} new). Rejected ${rejected.length} objective(s).`,
+      details: {
+        totalObjectivesEvaluated: totalObjectives,
+        matches: allMatches,
+        rejected,
+        justification,
+        gaps,
+        recommendations: recommendation,
+        narrative,
+        verified
+      }
+    };
+  }
+
+  private async finishNoMatch(
+    obligation: any, obligationSysId: string, totalObjectives: number, rejected: ResolvedObjective[],
+    justification: string, gaps: string, recommendation: string, tracer: AgentTracer, coverageNote: string = ''
+  ) {
+    const verified = await writeVerified(tracer, `obligation-control objective mapping (no match) for ${obligationSysId}`, () =>
+      (this.adapter as any).writeObligationControlObjectiveMapping?.(
+        obligationSysId,
+        [],
+        this.formatText(justification),
+        this.formatText(gaps),
+        this.formatText(recommendation)
+      ) ?? Promise.resolve(true)
+    );
+
+    const narrative = [
+      `${htmlLabel('SUMMARY:')} Reviewed ${totalObjectives} control objective(s) and found none that genuinely satisfy this obligation.`,
+      `${htmlLabel('RATIONALE — why each was rejected:')}<br>${htmlEscape(justification || 'Not provided')}`,
+      `${htmlLabel('GAPS:')}<br>${htmlEscape(gaps || 'Not provided')}`,
+      ...(recommendation ? [`${htmlLabel('RECOMMENDED OBJECTIVES TO CREATE:')}<br>${htmlEscape(recommendation)}`] : []),
+      ...(coverageNote ? [htmlEscape(coverageNote)] : [])
+    ].join('<br><br>');
+
+    return {
+      success: true,
+      message: 'No genuine match found — recommendation written',
+      details: {
+        totalObjectivesEvaluated: totalObjectives,
+        matches: [],
+        rejected,
+        justification,
+        gaps,
+        recommendations: recommendation,
+        narrative,
+        verified
+      }
+    };
+  }
+}
+
+// ============================================================================
 // 3. Risk-Control Mapping Agent
 // ============================================================================
 type ResolvedControl = { sysId: string; name: string; category: string; reason: string };
@@ -2250,7 +2949,7 @@ export class RiskControlMappingAgent {
       } else {
         const draft = toEvaluate.length <= RiskControlMappingAgent.BATCH_SIZE
           ? await withRetry(() => this.mapControlsWithTools(risk, toEvaluate, alreadyMapped, entityLabel, tracer), 2)
-              .then(d => d ? { ...d, coverageNote: '' } : null)
+            .then(d => d ? { ...d, coverageNote: '' } : null)
           : await this.runChunkedWithTools(risk, toEvaluate, alreadyMapped, entityLabel, tracer);
 
         if (!draft) {
@@ -2275,7 +2974,7 @@ export class RiskControlMappingAgent {
     }
 
     // Optional instance-level narrative (ServiceNow's advanced risk module
-    // carries a single u_ai_recommendation-style field directly on the risk
+    // carries a single u_ai_recommendations-style field directly on the risk
     // record). Most platforms have no equivalent, so this is duck-typed —
     // same convention as the Control Effectiveness / Inherent Assessment
     // justification writes — and only fires when both the adapter supports
@@ -2500,7 +3199,7 @@ export class RiskControlMappingAgent {
       indexedChunks.push({ chunk: controls.slice(i, i + batchSize), index: indexedChunks.length + 1 });
     }
 
-    const batchResults = await runInParallelBatches(indexedChunks, 5, async ({ chunk, index }) =>
+    const batchResults = await runInParallelBatches(indexedChunks, 20, async ({ chunk, index }) =>
       withRetry(() => this.mapControlsBatchWithTools(risk, chunk, alreadyMapped, entityLabel, index, chunksTotal, tracer), 2)
     );
 
@@ -2775,14 +3474,14 @@ export class RiskControlMappingAgent {
     // check, so re-sending them would create duplicate link rows.
     const verified = newMatchesToWrite.length > 0
       ? await writeVerified(tracer, `risk-control mapping for ${riskSysId}`, () =>
-          this.adapter.writeRiskControlMapping(
-            riskSysId,
-            newMatchesToWrite,
-            this.formatText(justification),
-            this.formatText(gaps),
-            this.formatText(recommendation)
-          )
+        this.adapter.writeRiskControlMapping(
+          riskSysId,
+          newMatchesToWrite,
+          this.formatText(justification),
+          this.formatText(gaps),
+          this.formatText(recommendation)
         )
+      )
       : true;
 
     const carriedCount = allMatches.length - newMatchesToWrite.length;
@@ -2914,7 +3613,7 @@ export class IssueIdentificationAgent {
     const getRatingOptions = (this.adapter as any).getIssueRatingOptions;
     const createIssue = (this.adapter as any).createRiskIssue;
     if (typeof resolveInstance !== 'function' || typeof hasExisting !== 'function' ||
-        typeof getContext !== 'function' || typeof getRatingOptions !== 'function' || typeof createIssue !== 'function') {
+      typeof getContext !== 'function' || typeof getRatingOptions !== 'function' || typeof createIssue !== 'function') {
       tracer.log('ERROR', { error: 'Adapter does not support issue drafting' });
       return { success: false, message: 'This platform does not support issue drafting.', details: null };
     }
@@ -3028,8 +3727,8 @@ export class IssueIdentificationAgent {
     const summary = outcome === 'skipped'
       ? `Skipped for risk "${risk.name}" — ${results.reason || 'no reason recorded'}.`
       : outcome === 'created'
-      ? `Issue created for risk "${risk.name}" (rating: ${results.rating || 'n/a'}). Action plan ${results.actionPlanTaskSysId ? 'created' : 'not created'}.`
-      : `Issue write could not be verified for risk "${risk.name}" — platform may have silently dropped a field.`;
+        ? `Issue created for risk "${risk.name}" (rating: ${results.rating || 'n/a'}). Action plan ${results.actionPlanTaskSysId ? 'created' : 'not created'}.`
+        : `Issue write could not be verified for risk "${risk.name}" — platform may have silently dropped a field.`;
     try {
       await writeTraceM.call(this.adapter, {
         agentName: 'IssueIdentificationAgent',
@@ -3263,7 +3962,7 @@ export class AuthorityDocumentCitationAgent {
   private static readonly BATCH_SIZE = 40;
   private static readonly DESC_LIMIT = 250;
 
-  constructor(private adapter: BaseGRCAdapter, private llm: BaseLLMClient) {}
+  constructor(private adapter: BaseGRCAdapter, private llm: BaseLLMClient) { }
 
   async execute(targetId: string, options?: {
     rawText?: string;
@@ -3319,7 +4018,7 @@ export class AuthorityDocumentCitationAgent {
       }
     } else {
       docDetails = await (this.adapter as any).getAuthorityDocumentDetails?.(targetId) ||
-                         await (this.adapter as any).getAuthorityDocument?.(targetId);
+        await (this.adapter as any).getAuthorityDocument?.(targetId);
       if (docDetails) {
         authorityName = docDetails.name || 'Authority Document';
         authorityRef = docDetails.number || docDetails.reference || '';
@@ -3351,7 +4050,7 @@ export class AuthorityDocumentCitationAgent {
             } else if (typeof response.data === 'object') {
               fetchedText = JSON.stringify(response.data, null, 2);
             }
-          } catch (_) {}
+          } catch (_) { }
 
           // 2. Jina AI Reader fallback (renders JS SPA pages to clean markdown)
           if (!fetchedText || fetchedText.length < 200) {
@@ -3362,7 +4061,7 @@ export class AuthorityDocumentCitationAgent {
                 fetchedText = jinaRes.data;
                 urlExtractionStatus = `Successfully fetched and converted web content via Jina Reader from URL (${documentUrl})`;
               }
-            } catch (_) {}
+            } catch (_) { }
           }
 
           if (fetchedText && fetchedText.length > 100) {
@@ -3391,7 +4090,7 @@ export class AuthorityDocumentCitationAgent {
 
     // 2. Fetch existing library obligations for duplicate detection & stale reporting (FEM-RD-05, FEM-RD-09)
     const existingObligations = await (this.adapter as any).getAllObligations?.() || [];
-    
+
     // Check for previous version delta (FEM-RD-06)
     let previousVersion: any = null;
     if (options?.previousVersionDocSysId) {
@@ -3628,15 +4327,15 @@ CRITICAL RULES:
           const dupTag = o.duplicate_status === 'exact_duplicate'
             ? ` <span style="color:#6f42c1;"><b>[LINKED EXISTING]</b></span>`
             : o.duplicate_status === 'near_duplicate'
-            ? ` <span style="color:#fd7e14;"><b>[NEAR-DUPLICATE]</b></span>`
-            : '';
+              ? ` <span style="color:#fd7e14;"><b>[NEAR-DUPLICATE]</b></span>`
+              : '';
 
           return `• <strong>${htmlEscape(o.proposed_name)}</strong>${dupTag} — ${appTag}<br>` +
-                 `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Citation Hierarchy:</strong> <code>${htmlEscape(o.citation_reference)}</code><br>` +
-                 `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Atomic Duty:</strong> <em>${htmlEscape(o.duty)}</em><br>` +
-                 `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Suggested Date / Source:</strong> ${o.document_url || documentUrl ? htmlEscape(o.document_url || documentUrl) : `<span style="color:#d97706;">Suggested as Today (${todayDate})</span>`}<br>` +
-                 `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Applicability Rationale:</strong> ${htmlEscape(o.applicability_rationale)}` +
-                 (o.change_rationale ? `<br>&nbsp;&nbsp;&nbsp;&nbsp;<strong>Change Note:</strong> ${htmlEscape(o.change_rationale)}` : '');
+            `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Citation Hierarchy:</strong> <code>${htmlEscape(o.citation_reference)}</code><br>` +
+            `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Atomic Duty:</strong> <em>${htmlEscape(o.duty)}</em><br>` +
+            `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Suggested Date / Source:</strong> ${o.document_url || documentUrl ? htmlEscape(o.document_url || documentUrl) : `<span style="color:#d97706;">Suggested as Today (${todayDate})</span>`}<br>` +
+            `&nbsp;&nbsp;&nbsp;&nbsp;<strong>Applicability Rationale:</strong> ${htmlEscape(o.applicability_rationale)}` +
+            (o.change_rationale ? `<br>&nbsp;&nbsp;&nbsp;&nbsp;<strong>Change Note:</strong> ${htmlEscape(o.change_rationale)}` : '');
         }).join('<br><br>')
       );
     }
@@ -3755,7 +4454,7 @@ CRITICAL RULES:
 export class CitationRiskMappingAgent {
   private static readonly OVER_MAPPING_THRESHOLD = 4;
 
-  constructor(private adapter: BaseGRCAdapter, private llm: BaseLLMClient) {}
+  constructor(private adapter: BaseGRCAdapter, private llm: BaseLLMClient) { }
 
   async execute(citationSysId: string): Promise<{
     success: boolean;
@@ -3826,7 +4525,9 @@ export class CitationRiskMappingAgent {
     }
 
     // 4. LLM evaluation: rank candidate risks per entity for this obligation
-    const riskSummaries = allRisks.map((r: any, i: number) => {
+    const evalRisks = allRisks;
+
+    const riskSummaries = evalRisks.map((r: any, i: number) => {
       const entityName = r.profileName || entities.find((e: any) => e.sysId === r.profileSysId)?.name || 'Unknown';
       const existingCitations = ((r as any).u_citations || (r as any).citations || '').split(',').filter(Boolean).length;
       return `[${i + 1}] Risk: "${r.name}" | Entity: "${entityName}" | Description: ${(r.description || '').substring(0, 200)} | Existing obligation links: ${existingCitations}`;
