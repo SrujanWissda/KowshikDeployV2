@@ -948,8 +948,30 @@ async function runLiveAgent(platform, agent, targetId) {
     body: JSON.stringify({ instanceId: currentInstanceId, platform, agent, targetId })
   });
   
-  const data = await response.json();
+  let data = await response.json();
   
+  // If backend started job asynchronously (HTTP 202 Accepted), poll until completed
+  if ((response.status === 202 || data.status === 'accepted') && data.jobId) {
+    updateConsolePane('console-raw', { status: 'Agent started in background. Polling job status...', jobId: data.jobId });
+    const jobId = data.jobId;
+    while (true) {
+      await new Promise(r => setTimeout(r, 1500));
+      try {
+        const pollRes = await fetch(`${API_BASE}/agent-jobs/${jobId}`);
+        const pollData = await pollRes.json();
+        if (pollData.status === 'completed') {
+          data = { success: true, result: pollData.result, logs: pollData.logs, agent: pollData.agent, platform: pollData.platform };
+          break;
+        } else if (pollData.status === 'failed') {
+          data = { success: false, error: pollData.error, logs: pollData.logs };
+          break;
+        }
+      } catch (pollErr) {
+        // Best effort retry
+      }
+    }
+  }
+
   if (!data.success) {
     updateConsolePane('console-writeback', `ERROR: ${data.error}\n\n${(data.logs || []).join('\n')}`, 'text');
     animatePipeline('idle');

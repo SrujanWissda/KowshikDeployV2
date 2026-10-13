@@ -45,6 +45,7 @@ import { VerificationAgent } from './core/verification_agent';
 import { instanceRegistry } from './core/instance-registry';
 import { obsService } from './core/instance-observability';
 import { cacheService } from './core/instance-cache';
+import { waitUntil } from '@vercel/functions';
 import multer from 'multer';
 import { processExcelMapping } from './services/excel_mapping_service';
 
@@ -272,10 +273,52 @@ app.get('/api/platforms', (req, res) => {
   });
 });
 
+// ----------------------------------------------------------------------------
+// In-Memory Agent Background Job Tracker
+// ----------------------------------------------------------------------------
+interface AgentJob {
+  jobId: string;
+  status: 'running' | 'completed' | 'failed';
+  agent: string;
+  platform: string;
+  targetId: string;
+  instanceId: string;
+  startTime: number;
+  completedTime?: number;
+  result?: any;
+  error?: string;
+  logs: string[];
+}
+const agentJobs = new Map<string, AgentJob>();
+
+// Status polling endpoint for background jobs
+app.get('/api/agent-jobs/:jobId', (req, res) => {
+  const { jobId } = req.params;
+  const job = agentJobs.get(jobId);
+  if (!job) {
+    return res.status(404).json({ success: false, error: `Job '${jobId}' not found.` });
+  }
+  res.json({
+    success: true,
+    jobId: job.jobId,
+    status: job.status,
+    agent: job.agent,
+    platform: job.platform,
+    targetId: job.targetId,
+    instanceId: job.instanceId,
+    startTime: job.startTime,
+    completedTime: job.completedTime,
+    result: job.result,
+    error: job.error,
+    logs: job.logs
+  });
+});
+
 // Endpoint to run any core GRC agent dynamically
 app.post('/api/run-agent', async (req, res) => {
   const { platform, agent, targetId } = req.body;
   const instanceId = req.instanceId; // ✅ From isolation middleware
+  const isSync = req.query.sync === 'true' || req.body.sync === true;
 
   if (!platform || !agent || !targetId) {
     return res.status(400).json({
@@ -289,12 +332,9 @@ app.post('/api/run-agent', async (req, res) => {
   try {
     const normPlatform = (platform || '').toLowerCase().trim();
     if (normPlatform === 'servicenow') {
-      // ✅ Use instanceRegistry — centralized validation + cached adapters
-      //    (this also guarantees isolation: each instanceId gets its own connection)
       adapter = instanceRegistry.getAdapter(instanceId);
       console.log(`[ISOLATION] Using registered ServiceNow adapter for instance '${instanceId}'`);
     } else if (normPlatform === 'salesforce' || normPlatform.includes('salesforce')) {
-      // Direct Salesforce adapter (or dynamic adapter if specifically registered)
       adapter = dynamicAdapters.get(platform) || salesforceAdapter;
     } else {
       adapter = dynamicAdapters.get(platform);
@@ -308,8 +348,6 @@ app.post('/api/run-agent', async (req, res) => {
     }
   } catch (error: any) {
     console.error(`[ISOLATION] Failed to get adapter for instance '${instanceId}': ${error.message}`);
-    // Include registry-level diagnostic info so callers can immediately see WHICH
-    // env vars are missing / set (not the actual values, just SET/NOT SET).
     const instanceConfigDiagnostics = instanceRegistry.getInstanceMetadata(instanceId)
       || { instanceId, isConfigured: false, hasUrl: false, hasKey: false };
     return res.status(500).json({
@@ -321,136 +359,162 @@ app.post('/api/run-agent', async (req, res) => {
     });
   }
 
-  // ✅ ISOLATION: Capture logs per-request (not globally)
-  const logs: string[] = [];
-  const originalLog = console.log;
-  console.log = (...args: any[]) => {
-    logs.push(args.join(' '));
-    originalLog(...args);
-  };
-
   if (!['control-effectiveness', 'inherent-assessment', 'risk-control-mapping', 'issue-identification', 'authority-document-citation', 'lrr-obligation-mapping', 'regulatory-decomposition', 'citation-risk-mapping', 'obligation-control-objective-mapping'].includes(agent)) {
-    console.log = originalLog;
     return res.status(400).json({
       error: `Unsupported agent action: ${agent}`,
       instanceId
     });
   }
 
-  try {
-    // ✅ ISOLATION: Each execution runs inside instance-scoped observability trace
-    let traceId = '';
-    const result = await obsService.withTrace(
-      instanceId,
-      'run-agent',
-      async (recordSpan) => {
-        // Record start of agent execution
-        recordSpan('agent-start', {
-          agent,
-          platform,
-          targetId
-        });
+  // Create tracked background job record
+  const jobId = `job_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  const jobRecord: AgentJob = {
+    jobId,
+    status: 'running',
+    agent,
+    platform,
+    targetId,
+    instanceId,
+    startTime: Date.now(),
+    logs: []
+  };
+  agentJobs.set(jobId, jobRecord);
 
-        let agentResult: any;
-        if (agent === 'control-effectiveness') {
-          agentResult = await new ControlEffectivenessAgent(adapter, llmClient).execute(targetId);
-        } else if (agent === 'inherent-assessment') {
-          agentResult = await new InherentAssessmentAgent(adapter, llmClient).execute(targetId);
-        } else if (agent === 'issue-identification') {
-          agentResult = await new IssueIdentificationAgent(adapter, llmClient).execute(targetId);
-        } else if (agent === 'authority-document-citation' || agent === 'lrr-obligation-mapping' || agent === 'regulatory-decomposition') {
-          agentResult = await new AuthorityDocumentCitationAgent(adapter, llmClient).execute(targetId, req.body.options || req.body);
-        } else if (agent === 'citation-risk-mapping') {
-          agentResult = await new CitationRiskMappingAgent(adapter, llmClient).execute(targetId);
-        } else if (agent === 'obligation-control-objective-mapping') {
-          agentResult = await new ObligationControlObjectiveMappingAgent(adapter, llmClient).execute(targetId);
-        } else {
-          agentResult = await new RiskControlMappingAgent(adapter, llmClient).execute(targetId);
-        }
+  // Clean old jobs (keep last 200)
+  if (agentJobs.size > 200) {
+    const oldestKey = agentJobs.keys().next().value;
+    if (oldestKey) agentJobs.delete(oldestKey);
+  }
 
-        recordSpan('agent-complete', {
-          agent,
-          platform
-        });
+  // Execution worker function
+  const runAgentExecution = async (): Promise<any> => {
+    const capturedLogs: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: any[]) => {
+      capturedLogs.push(args.join(' '));
+      jobRecord.logs.push(args.join(' '));
+      originalLog(...args);
+    };
 
-        return agentResult;
-      },
-      {
-        platform,
-        agent,
-        targetId,
-        instanceId // ✅ ISOLATION: Tag trace with instance
+    try {
+      const result = await obsService.withTrace(
+        instanceId,
+        'run-agent',
+        async (recordSpan) => {
+          recordSpan('agent-start', { agent, platform, targetId, jobId });
+
+          let agentResult: any;
+          if (agent === 'control-effectiveness') {
+            agentResult = await new ControlEffectivenessAgent(adapter, llmClient).execute(targetId);
+          } else if (agent === 'inherent-assessment') {
+            agentResult = await new InherentAssessmentAgent(adapter, llmClient).execute(targetId);
+          } else if (agent === 'issue-identification') {
+            agentResult = await new IssueIdentificationAgent(adapter, llmClient).execute(targetId);
+          } else if (agent === 'authority-document-citation' || agent === 'lrr-obligation-mapping' || agent === 'regulatory-decomposition') {
+            agentResult = await new AuthorityDocumentCitationAgent(adapter, llmClient).execute(targetId, req.body.options || req.body);
+          } else if (agent === 'citation-risk-mapping') {
+            agentResult = await new CitationRiskMappingAgent(adapter, llmClient).execute(targetId);
+          } else if (agent === 'obligation-control-objective-mapping') {
+            agentResult = await new ObligationControlObjectiveMappingAgent(adapter, llmClient).execute(targetId);
+          } else {
+            agentResult = await new RiskControlMappingAgent(adapter, llmClient).execute(targetId);
+          }
+
+          recordSpan('agent-complete', { agent, platform, jobId });
+          return agentResult;
+        },
+        { platform, agent, targetId, instanceId, jobId }
+      );
+
+      jobRecord.status = 'completed';
+      jobRecord.completedTime = Date.now();
+      jobRecord.result = result;
+
+      // Verification layer — runs automatically after agent completes
+      if (deepInfraClient.isLive()) {
+        new VerificationAgent(adapter, deepInfraClient).verifyAgentRun(agent, targetId, req.body.options || req.body)
+          .then(v => console.log(`[VerificationAgent] Instance '${instanceId}' [${agent}] ${v.success ? 'OK' : 'skipped'}: ${v.message}`))
+          .catch(e => console.warn(`[VerificationAgent] Instance '${instanceId}' [${agent}] Failed: ${e.message}`));
       }
-    );
 
-    console.log = originalLog;
+      return result;
+    } catch (error: any) {
+      jobRecord.status = 'failed';
+      jobRecord.completedTime = Date.now();
+      jobRecord.error = error?.message || 'Unknown error';
 
-    // ✅ DIAGNOSTICS: Expose adapter mode so caller can immediately tell
-    //    if writes went to live ServiceNow or just mock in-memory data.
-    //    This is the #1 debugging aid for "status good but no output in SNOW".
-    const adapterDiagnostics = typeof adapter.getAdapterDiagnostics === 'function'
-      ? adapter.getAdapterDiagnostics()
-      : { instanceId, mode: 'unknown', useLive: null as boolean | null, instanceUrlConfigured: false, authConfigured: false };
-
-    // ✅ ISOLATION: Response includes instanceId for audit trail
-    res.json({
-      success: true,
-      agent,
-      platform,
-      instanceId, // ✅ Proof of isolation
-      adapterDiagnostics, // ✅ Show live vs mock mode UPFRONT
-      result,
-      logs
-    });
-
-    // ── Verification layer — runs automatically after EVERY agent run ────────
-    // Fired AFTER the response is sent, not awaited — this must never add
-    // latency to the producer agent's response or affect it in any way.
-    // Independent of and unrelated to the producer's own success/failure;
-    // errors here are logged and swallowed, never surfaced to the caller.
-    if (deepInfraClient.isLive()) {
-      new VerificationAgent(adapter, deepInfraClient).verifyAgentRun(agent, targetId, req.body.options || req.body)
-        .then(v => console.log(`[VerificationAgent] Instance '${instanceId}' [${agent}] ${v.success ? 'OK' : 'skipped'}: ${v.message}`))
-        .catch(e => console.warn(`[VerificationAgent] Instance '${instanceId}' [${agent}] Failed: ${e.message}`));
+      console.error(
+        `\n================================================================================\n` +
+        `  ❌ AGENT EXECUTION FAILED [Job: '${jobId}'] [Instance: '${instanceId}'] [Agent: '${agent}']\n` +
+        `  Target ID: ${targetId}\n` +
+        `  Error: ${error?.message || 'Unknown error'}\n` +
+        `================================================================================\n`
+      );
+      if (error?.stack) {
+        console.error(error.stack);
+      }
+      throw error;
+    } finally {
+      console.log = originalLog;
     }
-  } catch (error: any) {
-    console.log = originalLog;
+  };
 
-    // ✅ CRITICAL DEBUG FIX: Log the ACTUAL error (not just sanitized message)
-    //    so Vercel function logs show the real root cause — stack trace + all.
-    //    Without this, we only see "[ISOLATION] Instance 'X' agent execution failed"
-    //    and have zero visibility into what actually broke.
-    console.error(
-      `\n` +
-      `================================================================================\n` +
-      `  ❌ AGENT EXECUTION FAILED [Instance: '${instanceId}'] [Agent: '${agent}'] [Platform: '${platform}']\n` +
-      `  Target ID: ${targetId}\n` +
-      `  Error: ${error?.message || 'Unknown error'}\n` +
-      `================================================================================\n`
-    );
-    if (error?.stack) {
-      console.error(error.stack);
+  // Synchronous execution mode (when explicitly requested)
+  if (isSync) {
+    try {
+      const result = await runAgentExecution();
+      const adapterDiagnostics = typeof adapter.getAdapterDiagnostics === 'function'
+        ? adapter.getAdapterDiagnostics()
+        : { instanceId, mode: 'unknown', useLive: null as boolean | null, instanceUrlConfigured: false, authConfigured: false };
+
+      return res.json({
+        success: true,
+        agent,
+        platform,
+        instanceId,
+        jobId,
+        adapterDiagnostics,
+        result,
+        logs: jobRecord.logs
+      });
+    } catch (error: any) {
+      const adapterDiagnostics = adapter && typeof adapter.getAdapterDiagnostics === 'function'
+        ? adapter.getAdapterDiagnostics()
+        : { instanceId, mode: 'unknown', useLive: null as boolean | null, instanceUrlConfigured: false, authConfigured: false };
+      return res.status(500).json({
+        success: false,
+        error: error?.message || 'Agent execution failed',
+        instanceId,
+        jobId,
+        adapterDiagnostics,
+        logs: jobRecord.logs
+      });
     }
-    console.error(error);
+  }
 
-    // ✅ DIAGNOSTICS: Expose adapter mode even on error paths
-    const adapterDiagnostics = adapter && typeof adapter.getAdapterDiagnostics === 'function'
-      ? adapter.getAdapterDiagnostics()
-      : { instanceId, mode: 'unknown', useLive: null as boolean | null, instanceUrlConfigured: false, authConfigured: false };
+  // ── Default Asynchronous Execution (Returns 202 immediately) ──
+  // Salesforce callouts time out at 120s (Apex callout timeout default is 30s).
+  // Return 202 Accepted right away, and let execution run in background.
+  res.status(202).json({
+    success: true,
+    status: 'accepted',
+    jobId,
+    message: 'Agent execution started in background.',
+    agent,
+    platform,
+    targetId,
+    instanceId
+  });
 
-    // ✅ ISOLATION: Sanitize error to not leak instance data
-    const errorMsg = error?.message || 'Unknown error occurred';
-    const sanitizedError = errorMsg.includes('[ISOLATION]')
-      ? errorMsg
-      : `[ISOLATION] Instance '${instanceId}' agent execution failed: ${errorMsg}`;
+  // Background promise execution kept alive by Vercel's waitUntil()
+  const backgroundPromise = runAgentExecution().catch(e => {
+    console.error(`[Background Task ${jobId}] Unhandled failure:`, e?.message || e);
+  });
 
-    res.status(500).json({
-      success: false,
-      error: sanitizedError,
-      instanceId, // ✅ Include instance for debugging
-      adapterDiagnostics, // ✅ Show live vs mock mode even on errors
-      logs
-    });
+  try {
+    waitUntil(backgroundPromise);
+  } catch (_) {
+    // Standalone Node runtime handles backgroundPromise in event loop
   }
 });
 
@@ -971,7 +1035,8 @@ app.use((req, res, next) => {
     { pattern: /^\/api\/platforms\/[^\/]+\/authority-documents$/, methods: ['GET'] },
     { pattern: /^\/api\/platforms\/[^\/]+\/citations$/, methods: ['GET'] },
     { pattern: /^\/api\/platforms\/[^\/]+\/obligations$/, methods: ['GET'] },
-    { pattern: /^\/api\/debug\/salesforce\/describe\/[^\/]+$/, methods: ['GET'] }
+    { pattern: /^\/api\/debug\/salesforce\/describe\/[^\/]+$/, methods: ['GET'] },
+    { pattern: /^\/api\/agent-jobs\/[^\/]+$/, methods: ['GET'] }
   ];
 
   let allowed = methodTable[req.path];

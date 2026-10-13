@@ -972,23 +972,98 @@ export class DynamicAdapter extends BaseGRCAdapter {
     riskSysId?: string;
     assessmentNumber?: string;
     summary?: string;
+    verificationOutput?: string;
   }): Promise<void> {
     if (this.supportsLiveQueries()) {
       try {
         const token = await this.getAccessToken();
-        const riskId = payload.riskSysId || (payload.targetId.startsWith('a6l') ? payload.targetId : null);
-        const cleanSummary = (typeof (require('./salesforce').convertHtmlToPlainText) === 'function')
-          ? require('./salesforce').convertHtmlToPlainText(payload.html || payload.summary || '')
-          : (payload.html || payload.summary || '').replace(/<[^>]+>/g, '');
 
-        const emaPayload: any = {
-          Name: `${payload.agentName} - ${(riskId || payload.targetId).substring(0, 15)}`.substring(0, 80),
-          Ema_Audit_Summary__c: cleanSummary.substring(0, 32768),
-          Risk_Assessment_Number__c: (payload.assessmentNumber || payload.agentName).substring(0, 20)
-        };
-        if (riskId) {
-          emaPayload.Risk__c = riskId;
+        // Normalize agent name so it contains Mapping, Inherent, Control, or Issue
+        let agentName = payload.agentName || 'RiskControlMappingAgent';
+        const lowerAgent = agentName.toLowerCase();
+        if (lowerAgent.includes('mapping') || lowerAgent.includes('risk-control')) {
+          agentName = 'RiskControlMappingAgent';
+        } else if (lowerAgent.includes('inherent')) {
+          agentName = 'InherentAssessmentAgent';
+        } else if (lowerAgent.includes('control') || lowerAgent.includes('effectiveness')) {
+          agentName = 'ControlEffectivenessAgent';
+        } else if (lowerAgent.includes('issue')) {
+          agentName = 'IssueIdentificationAgent';
         }
+
+        // Resolve 18-char grc__Risk__c Id (Risk__c is required and cannot be null)
+        let riskId = (payload.riskSysId || '').trim();
+        if (!riskId && payload.targetId && payload.targetId.startsWith('a6l')) {
+          riskId = payload.targetId.trim();
+        }
+
+        // If riskId is 15 chars, convert to 18 chars
+        if (riskId.length === 15) {
+          try {
+            const { convert15To18CharId } = require('./salesforce');
+            riskId = convert15To18CharId(riskId);
+          } catch {}
+        }
+
+        // If targetId is an assessment or riskId starts with a6k, look up parent risk
+        if (riskId.startsWith('a6k') || (!riskId && payload.targetId.startsWith('a6k'))) {
+          try {
+            const asmtId = riskId.startsWith('a6k') ? riskId : payload.targetId;
+            const res = await axios.get(
+              `${this.instanceUrl}/services/data/v60.0/query?q=${encodeURIComponent(`SELECT Risk__Risk__c FROM Risk__Risk_Assessment__c WHERE Id = '${asmtId}' LIMIT 1`)}`,
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (res.data.records?.[0]?.Risk__Risk__c) {
+              riskId = res.data.records[0].Risk__Risk__c;
+            }
+          } catch (e: any) {
+            console.warn(`[DynamicAdapter] Could not look up Risk__Risk__c: ${e.message}`);
+          }
+        }
+
+        // If still missing or not a6l, fetch a fallback live risk
+        if (!riskId || !riskId.startsWith('a6l')) {
+          try {
+            const res = await axios.get(
+              `${this.instanceUrl}/services/data/v60.0/query?q=${encodeURIComponent(`SELECT Id FROM grc__Risk__c ORDER BY CreatedDate DESC LIMIT 1`)}`,
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (res.data.records?.[0]?.Id) {
+              riskId = res.data.records[0].Id;
+            }
+          } catch {}
+        }
+
+        if (riskId.length === 15) {
+          try {
+            const { convert15To18CharId } = require('./salesforce');
+            riskId = convert15To18CharId(riskId);
+          } catch {}
+        }
+
+        const nameSuffix = (riskId || 'unknown').substring(0, 15);
+        const nameField = `${agentName} - ${nameSuffix}`.substring(0, 80);
+
+        const sfModule = require('./salesforce');
+        const cleanSummary = (typeof sfModule.convertHtmlToPlainText === 'function')
+          ? sfModule.convertHtmlToPlainText(payload.summary || payload.html || '')
+          : (payload.summary || payload.html || '').replace(/<[^>]+>/g, '');
+        const cleanTrace = (typeof sfModule.convertHtmlToPlainText === 'function')
+          ? sfModule.convertHtmlToPlainText(payload.html || payload.summary || '')
+          : (payload.html || payload.summary || '').replace(/<[^>]+>/g, '');
+        const cleanVerif = (typeof sfModule.convertHtmlToPlainText === 'function')
+          ? sfModule.convertHtmlToPlainText(payload.verificationOutput || '')
+          : (payload.verificationOutput || '').replace(/<[^>]+>/g, '');
+
+        // Only use permitted fields: Name, Risk__c, Risk_Assessment_Number__c, Ema_Audit_Summary__c, Trace__c, Verification_Layer_Output__c
+        const emaPayload: Record<string, string> = {
+          Name: nameField,
+          Risk__c: riskId,
+          Risk_Assessment_Number__c: (payload.assessmentNumber || 'RA-001').substring(0, 20),
+          Ema_Audit_Summary__c: cleanSummary.substring(0, 32768),
+          Trace__c: cleanTrace.substring(0, 32768),
+          Verification_Layer_Output__c: cleanVerif.substring(0, 32768)
+        };
 
         const response = await axios.post(
           `${this.instanceUrl}/services/data/v60.0/sobjects/Ema_Audit_Trail__c`,
@@ -998,9 +1073,12 @@ export class DynamicAdapter extends BaseGRCAdapter {
             timeout: 15000
           }
         );
-        console.log(`[DynamicAdapter:${this.config.platformName}] ✅ Created Ema_Audit_Trail__c record ${response.data.id} for ${payload.agentName}`);
+        console.log(`[DynamicAdapter:${this.config.platformName}] ✅ Created Ema_Audit_Trail__c record ${response.data.id} for ${agentName}`);
       } catch (err: any) {
-        console.warn(`[DynamicAdapter:${this.config.platformName}] ⚠️ Failed to write EMA audit trail: ${err.message}`);
+        console.error(
+          `[DynamicAdapter:${this.config.platformName}] ❌ Failed to write EMA audit trail (HTTP ${err.response?.status || '?'}): ` +
+          JSON.stringify(err.response?.data || err.message)
+        );
       }
     }
   }

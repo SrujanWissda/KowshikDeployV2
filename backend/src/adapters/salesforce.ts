@@ -30,6 +30,23 @@ export function convertHtmlToPlainText(html: string): string {
     .trim();
 }
 
+export function convert15To18CharId(id15: string): string {
+  if (!id15 || id15.length !== 15) return id15;
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ012345';
+  let suffix = '';
+  for (let i = 0; i < 3; i++) {
+    let flags = 0;
+    for (let j = 0; j < 5; j++) {
+      const c = id15.charAt(i * 5 + j);
+      if (c >= 'A' && c <= 'Z') {
+        flags |= (1 << j);
+      }
+    }
+    suffix += chars.charAt(flags);
+  }
+  return id15 + suffix;
+}
+
 // ============================================================================
 // Mock Salesforce Custom Objects (Schema Simulation — fallback when LIVE=false)
 // ============================================================================
@@ -769,16 +786,6 @@ export class SalesforceAdapter extends BaseGRCAdapter {
           Risk__Assessment_Date__c: new Date().toISOString().split('T')[0]
         });
         console.log(`[Salesforce LIVE UPDATE] Updated Risk__Control_Assessment__c ${rowSysId} → ${ratingLabel} (Design, Performance & Overall set)`);
-
-        // Create EMA audit trail record linked to this control assessment
-        if (auditTrail) {
-          try {
-            await this.createEMATrail(rowSysId, 'Risk__Control_Assessment__c', 'Control Effectiveness', auditTrail);
-          } catch (trailErr: any) {
-            console.warn(`[SalesforceAdapter] Failed to create EMA audit trail for control assessment ${rowSysId}: ${trailErr.message}`);
-            // Don't fail the whole write if audit trail fails
-          }
-        }
       } catch (e: any) {
         console.error(`[SalesforceAdapter] writeControlEffectiveness failed for ${rowSysId}: ${e.message}`);
         throw e;
@@ -853,16 +860,6 @@ export class SalesforceAdapter extends BaseGRCAdapter {
         console.log(`[Salesforce LIVE UPDATE] Updated Risk__Risk_Assessment_Rating__c ${rowSysId}`);
         console.log(`  Rating: ${ratingLabel} | Band: ${bandData.band} | Best: ${bandData.bestCase} | Value: ${bandData.value} | Worst: ${bandData.worstCase}`);
         console.log(`  Justification: ${cleanJustification}`);
-
-        // Create EMA audit trail record linked to this rating assessment
-        if (auditTrail) {
-          try {
-            await this.createEMATrail(rowSysId, 'Risk__Risk_Assessment_Rating__c', 'Inherent Assessment', auditTrail);
-          } catch (trailErr: any) {
-            console.warn(`[SalesforceAdapter] Failed to create EMA audit trail for inherent rating ${rowSysId}: ${trailErr.message}`);
-            // Don't fail the whole write if audit trail fails
-          }
-        }
         return true;
       } catch (e: any) {
         console.error(`[SalesforceAdapter] writeInherentFactor failed for ${rowSysId}: ${e.message}`);
@@ -1001,64 +998,149 @@ export class SalesforceAdapter extends BaseGRCAdapter {
   }
 
   // --------------------------------------------------------------------------
-  // createEMATrail — creates an audit trail record for agent execution
-  // Falls back to appending to assessment record if EMA object doesn't exist
+  // createEMATrail — creates an Ema_Audit_Trail__c record for agent execution
+  //
+  // Allowed fields & limits (from object describe):
+  //   Name                          — max 80 chars
+  //   Risk__c                       — 18-char Lookup(grc__Risk__c), REQUIRED
+  //   Risk_Assessment_Number__c     — max 20 chars
+  //   Ema_Audit_Summary__c          — Long Text Area, max 32 768
+  //   Trace__c                      — Long Text Area, max 32 768
+  //   Verification_Layer_Output__c  — Long Text Area, max 32 768
+  //
+  // Name format: "<AgentName> - <15-char Risk Id>"  so the Salesforce
+  // Lightning component can search for %Mapping%, %Inherent%, %Control%,
+  // or %Issue% in the Name.
   // --------------------------------------------------------------------------
-  private async createEMATrail(
-    recordSysId: string,
-    recordType: string,
-    assessmentType: string,
-    auditTrailHtml: string
-  ): Promise<void> {
+  // --------------------------------------------------------------------------
+  // createEMATrail — creates an Ema_Audit_Trail__c record for agent execution
+  //
+  // Allowed fields & limits (from live Salesforce describe):
+  //   Name                          — max 80 chars (<AgentName> - <15-char Risk Id>)
+  //   Risk__c                       — 18-char grc__Risk__c Id, REQUIRED lookup
+  //   Risk_Assessment_Number__c     — max 20 chars
+  //   Ema_Audit_Summary__c          — Long Text Area, max 32 768
+  //   Trace__c                      — Long Text Area, max 32 768
+  //   Verification_Layer_Output__c  — Long Text Area, max 32 768
+  //
+  // Name format: "<AgentName> - <15-char Risk Id>"  so the Salesforce
+  // Lightning component can search for %Mapping%, %Inherent%, %Control%,
+  // or %Issue% in the Name.
+  // --------------------------------------------------------------------------
+  private async createEMATrail(payload: {
+    agentName: string;
+    riskSysId: string;
+    assessmentNumber?: string;
+    summary: string;
+    traceHtml?: string;
+    verificationOutput?: string;
+  }): Promise<void> {
     try {
       const token = await this.getAccessToken();
-      // Ema_Audit_Summary__c is a plaintextarea field in Salesforce — convert HTML to clean formatted plain text
-      const cleanSummary = convertHtmlToPlainText(auditTrailHtml);
 
-      const payload: any = {
-        Name: `${assessmentType} - ${recordSysId.substring(0, 10)}`,
-        Ema_Audit_Summary__c: cleanSummary.substring(0, 32768),
-        Risk_Assessment_Number__c: recordType // Store the object type being assessed
+      // Normalize agent name so it contains Mapping, Inherent, Control, or Issue
+      let agentName = payload.agentName || 'RiskControlMappingAgent';
+      const lowerAgent = agentName.toLowerCase();
+      if (lowerAgent.includes('mapping') || lowerAgent.includes('risk-control')) {
+        agentName = 'RiskControlMappingAgent';
+      } else if (lowerAgent.includes('inherent')) {
+        agentName = 'InherentAssessmentAgent';
+      } else if (lowerAgent.includes('control') || lowerAgent.includes('effectiveness')) {
+        agentName = 'ControlEffectivenessAgent';
+      } else if (lowerAgent.includes('issue')) {
+        agentName = 'IssueIdentificationAgent';
+      }
+
+      // Resolve a valid 18-char grc__Risk__c Id (Risk__c is required and cannot be null)
+      let riskId = (payload.riskSysId || '').trim();
+
+      // If riskId starts with 'a6k' (Assessment), query the parent grc__Risk__c
+      if (riskId.startsWith('a6k')) {
+        try {
+          const rows = await this.querySOQL<any>(
+            `SELECT Risk__Risk__c FROM Risk__Risk_Assessment__c WHERE Id = '${riskId}' LIMIT 1`
+          );
+          if (rows.length > 0 && rows[0].Risk__Risk__c) {
+            riskId = rows[0].Risk__Risk__c;
+          }
+        } catch (e: any) {
+          console.warn(`[SalesforceAdapter] Could not look up Risk for assessment ${riskId}: ${e.message}`);
+        }
+      }
+
+      // If riskId is 15 characters, convert to 18 characters
+      if (riskId.length === 15) {
+        riskId = convert15To18CharId(riskId);
+      }
+
+      // If still missing or not a valid Risk ID (a6l), query a fallback live grc__Risk__c
+      if (!riskId || !riskId.startsWith('a6l')) {
+        try {
+          const liveRisks = await this.querySOQL<any>(`SELECT Id FROM grc__Risk__c ORDER BY CreatedDate DESC LIMIT 1`);
+          if (liveRisks.length > 0 && liveRisks[0].Id) {
+            riskId = liveRisks[0].Id;
+            console.log(`[SalesforceAdapter] Using fallback live Risk__c: ${riskId}`);
+          }
+        } catch (e: any) {
+          console.warn(`[SalesforceAdapter] Could not query fallback grc__Risk__c: ${e.message}`);
+        }
+      }
+
+      // Ensure 18-char format
+      if (riskId.length === 15) {
+        riskId = convert15To18CharId(riskId);
+      }
+
+      // Build Name: <AgentName> - <15-char Risk Id> (max 80 chars)
+      const nameSuffix = riskId.substring(0, 15);
+      const nameField  = `${agentName} - ${nameSuffix}`.substring(0, 80);
+
+      const cleanSummary = convertHtmlToPlainText(payload.summary || '');
+      const cleanTrace   = convertHtmlToPlainText(payload.traceHtml || '') || cleanSummary;
+      const cleanVerif   = convertHtmlToPlainText(payload.verificationOutput || '');
+
+      // Only use permitted fields with strict length caps:
+      // Name (80), Risk__c (18-char required), Risk_Assessment_Number__c (20),
+      // Ema_Audit_Summary__c (32768), Trace__c (32768), Verification_Layer_Output__c (32768)
+      const sObjectPayload: Record<string, string> = {
+        Name:                          nameField,
+        Risk__c:                       riskId,
+        Risk_Assessment_Number__c:     (payload.assessmentNumber || 'RA-001').substring(0, 20),
+        Ema_Audit_Summary__c:          cleanSummary.substring(0, 32768),
+        Trace__c:                      cleanTrace.substring(0, 32768),
+        Verification_Layer_Output__c:  cleanVerif.substring(0, 32768)
       };
+
+      console.log(`[SalesforceAdapter] Inserting Ema_Audit_Trail__c — Name: "${nameField}", Risk__c: "${riskId}"`);
 
       try {
         const response = await axios.post(
           `${this.instanceUrl}/services/data/v60.0/sobjects/Ema_Audit_Trail__c`,
-          payload,
+          sObjectPayload,
           {
             headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
             timeout: 15000
           }
         );
 
-        console.log(`[SalesforceAdapter] ✅ Created EMA audit trail record ${response.data.id} for ${recordType} ${recordSysId}`);
+        console.log(`[SalesforceAdapter] ✅ Created Ema_Audit_Trail__c ${response.data.id} for ${agentName}`);
         return;
       } catch (trailErr: any) {
-        // If EMA object doesn't exist, fall back to storing in assessment record
-        if (trailErr.response?.status === 404 || trailErr.message?.includes('sobject type')) {
-          console.warn(`[SalesforceAdapter] ⚠️  Ema_Audit_Trail__c object not found. Using fallback: storing audit trail in assessment record.`);
+        // ── Log the FULL Salesforce error body (exact field and error code) ──
+        console.error(
+          `[SalesforceAdapter] ❌ Ema_Audit_Trail__c insert failed (HTTP ${trailErr.response?.status || '?'}): ` +
+          JSON.stringify(trailErr.response?.data || trailErr.message)
+        );
 
-          // Fallback: append audit trail to the assessment record's audit/notes field
-          if (recordType === 'Risk__Control_Assessment__c') {
-            await this.restUpdate(recordType, recordSysId, {
-              Risk__Audit_Trail_Notes__c: cleanSummary.substring(0, 32768)
-            });
-            console.log(`[SalesforceAdapter] ✅ Appended audit trail to ${recordType} ${recordSysId} (fallback)`);
-          } else if (recordType === 'Risk__Risk_Assessment_Rating__c') {
-            await this.restUpdate(recordType, recordSysId, {
-              Risk__Audit_Trail_Notes__c: cleanSummary.substring(0, 32768)
-            });
-            console.log(`[SalesforceAdapter] ✅ Appended audit trail to ${recordType} ${recordSysId} (fallback)`);
-          }
+        if (trailErr.response?.status === 404 || trailErr.message?.includes('sobject type')) {
+          console.warn(`[SalesforceAdapter] ⚠️ Ema_Audit_Trail__c object not found in org.`);
           return;
         }
 
-        // For other errors, re-throw
-        throw trailErr;
+        console.warn(`[SalesforceAdapter] ⚠️ Continuing despite Ema_Audit_Trail__c insert failure (non-critical).`);
       }
     } catch (e: any) {
       console.error(`[SalesforceAdapter] ❌ EMA audit trail failed: ${e.message}`);
-      // Don't throw — audit trail is non-critical, assessment should still complete
     }
   }
 
@@ -1074,15 +1156,17 @@ export class SalesforceAdapter extends BaseGRCAdapter {
     riskSysId?: string;
     assessmentNumber?: string;
     summary?: string;
+    verificationOutput?: string;
   }): Promise<void> {
     if (this.useLive) {
-      const cleanSummary = convertHtmlToPlainText(payload.html || payload.summary || '');
-      await this.createEMATrail(
-        payload.riskSysId || payload.targetId,
-        payload.agentName,
-        payload.agentName,
-        cleanSummary
-      );
+      await this.createEMATrail({
+        agentName:          payload.agentName,
+        riskSysId:          payload.riskSysId || payload.targetId,
+        assessmentNumber:   payload.assessmentNumber,
+        summary:            payload.html || payload.summary || '',
+        traceHtml:          payload.html || '',
+        verificationOutput: payload.verificationOutput || ''
+      });
     }
   }
 
