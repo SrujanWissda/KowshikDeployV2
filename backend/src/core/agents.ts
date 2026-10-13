@@ -1029,6 +1029,8 @@ export class InherentAssessmentAgent {
             outcome: 'copied',
             results,
             html: tracer.renderHtml('InherentAssessmentAgent', inst.number || instanceSysId),
+            riskSysId: inst.riskSysId,
+            assessmentNumber: inst.number,
             summary: buildAssessmentSummary('inherent factor(s)', results, 'copied')
           });
         } catch (_) { /* observability is best-effort — never block the run */ }

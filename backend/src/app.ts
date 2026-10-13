@@ -166,6 +166,19 @@ app.use((req, res, next) => {
                    req.query?.instanceId ||
                    req.get('X-Instance-Id');
 
+  const platform = (req.body?.platform || req.query?.platform || '').toLowerCase().trim();
+  const isSalesforce = platform === 'salesforce' || platform.includes('salesforce') || instanceId === 'salesforce';
+
+  // If request is from Salesforce, isolate it under the 'salesforce' platform context
+  // and do NOT validate against ServiceNow instanceRegistry.
+  if (isSalesforce) {
+    req.instanceId = instanceId || 'salesforce';
+    req.obsService = obsService;
+    req.cacheService = cacheService;
+    console.log(`[ISOLATION] ${req.method} ${req.path} from platform 'salesforce' (instance: '${req.instanceId}')`);
+    return next();
+  }
+
   const validInstances = instanceRegistry.getValidInstances();
 
   // If no instanceId provided or 'default' requested, fallback to first valid configured instance
@@ -320,6 +333,8 @@ app.post('/api/run-agent', async (req, res) => {
   const instanceId = req.instanceId; // ✅ From isolation middleware
   const isSync = req.query.sync === 'true' || req.body.sync === true;
 
+  console.log(`[RUN-AGENT INBOUND] platform='${platform}', agent='${agent}', targetId='${targetId}', instanceId='${instanceId}'`);
+
   if (!platform || !agent || !targetId) {
     return res.status(400).json({
       error: 'Missing parameters platform, agent, or targetId.',
@@ -327,15 +342,25 @@ app.post('/api/run-agent', async (req, res) => {
     });
   }
 
+  const normPlatform = (platform || '').toLowerCase().trim();
+  const isHexSysId = /^[0-9a-f]{32}$/i.test(targetId);
+  const isSalesforceId = /^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$/.test(targetId);
+
+  if ((normPlatform === 'salesforce' || normPlatform.includes('salesforce')) && isHexSysId) {
+    console.warn(`[RUN-AGENT MISMATCH] ⚠️ Platform is '${platform}' but targetId '${targetId}' is a 32-hex-character ServiceNow sys_id! Verify whether this call was intended for ServiceNow.`);
+  } else if (normPlatform === 'servicenow' && isSalesforceId && !isHexSysId) {
+    console.warn(`[RUN-AGENT MISMATCH] ⚠️ Platform is '${platform}' but targetId '${targetId}' looks like a 15/18-character Salesforce ID! Verify whether this call was intended for Salesforce.`);
+  }
+
   // ✅ ISOLATION: Select adapter for THIS instance only
   let adapter: any;
   try {
-    const normPlatform = (platform || '').toLowerCase().trim();
     if (normPlatform === 'servicenow') {
       adapter = instanceRegistry.getAdapter(instanceId);
       console.log(`[ISOLATION] Using registered ServiceNow adapter for instance '${instanceId}'`);
     } else if (normPlatform === 'salesforce' || normPlatform.includes('salesforce')) {
       adapter = dynamicAdapters.get(platform) || salesforceAdapter;
+      console.log(`[ISOLATION] Using Salesforce adapter for target '${targetId}'`);
     } else {
       adapter = dynamicAdapters.get(platform);
     }
@@ -362,6 +387,30 @@ app.post('/api/run-agent', async (req, res) => {
   if (!['control-effectiveness', 'inherent-assessment', 'risk-control-mapping', 'issue-identification', 'authority-document-citation', 'lrr-obligation-mapping', 'regulatory-decomposition', 'citation-risk-mapping', 'obligation-control-objective-mapping'].includes(agent)) {
     return res.status(400).json({
       error: `Unsupported agent action: ${agent}`,
+      instanceId
+    });
+  }
+
+  // ── In-flight deduplication: if the same agent+platform+target is already
+  // running, return the existing jobId instead of spawning a parallel execution.
+  // Root cause of "2 ema audits every run": ServiceNow retries or double-clicks
+  // fire a second POST while the first is still in progress. ──
+  const existingJob = Array.from(agentJobs.values()).find(
+    j => j.status === 'running' &&
+         j.agent === agent &&
+         (j.platform || '').toLowerCase() === normPlatform &&
+         j.targetId === targetId
+  );
+  if (existingJob) {
+    console.log(`[DEDUP] Agent '${agent}' for target '${targetId}' on instance '${instanceId}' is already running (job ${existingJob.jobId}). Returning existing job.`);
+    return res.status(202).json({
+      success: true,
+      status: 'already_running',
+      jobId: existingJob.jobId,
+      message: 'Agent execution already in progress for this target.',
+      agent,
+      platform,
+      targetId,
       instanceId
     });
   }

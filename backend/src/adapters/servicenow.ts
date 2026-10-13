@@ -1771,6 +1771,33 @@ export class ServiceNowAdapter extends BaseGRCAdapter {
     }
 
     try {
+      // ── DEDUPLICATION GUARD ──────────────────────────────────────────────
+      // If a u_ema_audit_trail row for this exact agent+target was created
+      // within the last 5 minutes, skip the insert — prevents duplicates
+      // caused by ServiceNow retries, double-clicks, or race conditions.
+      try {
+        const dedupeTarget = payload.assessmentNumber || payload.riskSysId || payload.authorityDocSysId || payload.citationSysId || payload.targetId;
+        const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19);
+        // Build a query that matches the same agent name + any of the reference fields
+        const dedupeQuery = `u_name=${payload.agentName}^sys_created_on>${fiveMinAgo}^ORDERBYDESCsys_created_on`;
+        const recentRows = await this.queryTable<any>('u_ema_audit_trail', {
+          sysparm_query: dedupeQuery,
+          sysparm_fields: 'sys_id,u_risk_assessment_number,u_risk',
+          sysparm_limit: '1'
+        });
+        if (recentRows.length > 0) {
+          const recentTarget = getValue(recentRows[0].u_risk_assessment_number) || getValue(recentRows[0].u_risk);
+          if (recentTarget === dedupeTarget || (!recentTarget && recentRows.length > 0)) {
+            console.log(`[Ema Observability] DEDUP — Skipping u_ema_audit_trail insert for ${payload.agentName} (target=${dedupeTarget}): recent row ${getValue(recentRows[0].sys_id)} exists (created within last 5 min).`);
+            return;
+          }
+        }
+      } catch (dedupeErr: any) {
+        // Dedupe check is best-effort — if the query itself fails (e.g. 404),
+        // fall through and write the trace anyway rather than blocking on it.
+        console.warn(`[Ema Observability] Dedupe check failed (proceeding with write): ${dedupeErr.message}`);
+      }
+
       const traceHtml = payload.html || this.buildTraceHtml(payload);
       const postPayload: Record<string, any> = {
         u_name:  payload.agentName,
