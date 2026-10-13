@@ -73,6 +73,7 @@ export class GeminiLLMClient extends BaseLLMClient {
 
     try {
       const url = `${this.endpoint}?key=${this.apiKey}`;
+      const isThinkingModel = this.model.includes('3') || this.model.includes('2.5') || this.model.includes('thinking') || this.model.includes('preview');
       const payload = {
         contents: [
           {
@@ -85,7 +86,8 @@ export class GeminiLLMClient extends BaseLLMClient {
         generation_config: {
           temperature: 0.1,
           response_mime_type: 'application/json',
-          response_schema: schema
+          response_schema: schema,
+          ...(isThinkingModel ? { thinking_config: { thinking_budget: 0 } } : {})
         }
       };
 

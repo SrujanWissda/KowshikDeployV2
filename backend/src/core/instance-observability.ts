@@ -32,6 +32,8 @@ export class InstanceObservabilityService {
   // Current trace per instance: instanceId -> trace
   private currentTraces = new Map<string, Trace>();
 
+  private activeTraces = new Map<string, Trace>();
+
   /**
    * Start a new trace for specific instance
    * ISOLATION: Trace is immediately tagged with instanceId
@@ -57,6 +59,7 @@ export class InstanceObservabilityService {
 
     // Set as current for this instance
     this.currentTraces.set(instanceId, trace);
+    this.activeTraces.set(trace.traceId, trace);
 
     return trace.traceId;
   }
@@ -69,9 +72,10 @@ export class InstanceObservabilityService {
     instanceId: string,
     spanName: string,
     metadata?: any,
-    duration?: number
+    duration?: number,
+    traceId?: string
   ): void {
-    const trace = this.currentTraces.get(instanceId);
+    const trace = (traceId ? this.activeTraces.get(traceId) : null) || this.currentTraces.get(instanceId);
     if (!trace) {
       console.warn(
         `[InstanceObservability] No active trace for instance '${instanceId}' when recording span '${spanName}'`
@@ -97,12 +101,17 @@ export class InstanceObservabilityService {
    * End trace for instance
    * ISOLATION: Only ends this instance's trace
    */
-  endTrace(instanceId: string): void {
-    const trace = this.currentTraces.get(instanceId);
+  endTrace(instanceId: string, traceId?: string): void {
+    const trace = (traceId ? this.activeTraces.get(traceId) : null) || this.currentTraces.get(instanceId);
     if (trace) {
       trace.endTime = Date.now();
     }
-    this.currentTraces.delete(instanceId);
+    if (traceId) {
+      this.activeTraces.delete(traceId);
+    }
+    if (this.currentTraces.get(instanceId)?.traceId === traceId || !traceId) {
+      this.currentTraces.delete(instanceId);
+    }
   }
 
   /**
@@ -188,9 +197,9 @@ export class InstanceObservabilityService {
     const traceId = this.startTrace(instanceId, traceName, metadata);
 
     try {
-      // Provide convenient span recorder for this instance
+      // Provide convenient span recorder for this instance bound to this traceId
       const recordSpanFn = (name: string, meta?: any, duration?: number) => {
-        this.recordSpan(instanceId, name, meta, duration);
+        this.recordSpan(instanceId, name, meta, duration, traceId);
       };
 
       const result = await fn(recordSpanFn);
@@ -201,10 +210,10 @@ export class InstanceObservabilityService {
         message: error instanceof Error ? error.message : String(error),
         // ✅ ISOLATION: Never expose stack traces that might leak data
         type: error instanceof Error ? error.constructor.name : 'unknown'
-      });
+      }, undefined, traceId);
       throw error;
     } finally {
-      this.endTrace(instanceId);
+      this.endTrace(instanceId, traceId);
     }
   }
 
