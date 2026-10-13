@@ -149,29 +149,32 @@ export class GeminiLLMClient extends BaseLLMClient {
     const toolCallLog: Array<{ name: string; args: any }> = [];
     const functionDeclarations = tools.map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
 
+    const isThinkingModel = this.model.includes('3') || this.model.includes('2.5') || this.model.includes('thinking') || this.model.includes('preview');
+    const toolMaxTokens = parseInt(process.env.GEMINI_TOOL_MAX_TOKENS || '8192', 10);
+
     for (let turn = 1; turn <= maxTurns; turn++) {
       const isFinalTurn = turn === maxTurns;
       let data: any;
       try {
+        const generation_config: any = {
+          temperature: 0.1,
+          max_output_tokens: toolMaxTokens,
+          // ✅ Disable thinking budget for tool loops on Gemini 2.5 / 3 preview models:
+          //    Without this, the model exhausts all 4096-8192 tokens on internal thoughts,
+          //    causing finishReason=MAX_TOKENS with empty content parts on every turn.
+          ...(isThinkingModel ? { thinking_config: { thinking_budget: 0 } } : {})
+        };
+
+        if (isFinalTurn) {
+          generation_config.response_mime_type = 'application/json';
+          generation_config.response_schema = functionDeclarations.find((f: any) => f.name === finalAnswerTool)?.parameters;
+        }
+
         const response = await axios.post(url, {
           contents,
           system_instruction: { parts: [{ text: systemInstruction }] },
           tools: [{ functionDeclarations }],
-          // ✅ FINAL TURN: use response_schema to FORCE the final answer tool shape
-          //    — the model literally cannot respond in any other shape; this
-          //    eliminates "max turns exceeded" when the model just won't stop
-          //    chatting. The response_schema matches the finalAnswerTool's args
-          //    so the returned object has the same shape as a function-call return.
-          ...(isFinalTurn ? {
-            generation_config: {
-              temperature: 0.1,
-              max_output_tokens: parseInt(process.env.GEMINI_TOOL_MAX_TOKENS || '4096', 10),
-              response_mime_type: 'application/json',
-              response_schema: functionDeclarations.find((f: any) => f.name === finalAnswerTool)?.parameters
-            }
-          } : {
-            generation_config: { temperature: 0.1, max_output_tokens: parseInt(process.env.GEMINI_TOOL_MAX_TOKENS || '4096', 10) }
-          })
+          generation_config
         }, {
           headers: { 'Content-Type': 'application/json' },
           timeout: parseInt(process.env.GEMINI_TIMEOUT_MS || '90000', 10)
@@ -192,7 +195,15 @@ export class GeminiLLMClient extends BaseLLMClient {
           recordSpan('llm.tool_loop', t0, 'error', { model: this.model, turn, reason: 'empty candidate on final turn' });
           return null;
         }
-        contents.push({ role: 'user', parts: [{ text: `Your last response was empty. Please use one of the available tools to continue investigating, or call ${finalAnswerTool} if you have enough evidence.` }] });
+        // Preserve alternating roles (model -> user) required by Gemini API
+        contents.push({ role: 'model', parts: [{ text: 'I am evaluating the available information.' }] });
+        contents.push({ role: 'user', parts: [{ text: `Your last response had no parts. Please continue investigating or call ${finalAnswerTool} to finalize.` }] });
+
+        // If MAX_TOKENS was hit, skip spinning multiple turns with empty parts and force final answer next
+        if (finishReason === 'MAX_TOKENS' && turn < maxTurns - 1) {
+          console.warn(`[GeminiLLMClient] MAX_TOKENS reached on turn ${turn} — advancing to final turn.`);
+          turn = maxTurns - 1;
+        }
         continue;
       }
 
