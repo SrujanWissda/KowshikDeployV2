@@ -315,14 +315,14 @@ export class SalesforceAdapter extends BaseGRCAdapter {
     if (this.useLive) {
       try {
         const records = await this.querySOQL<any>(
-          `SELECT Id, Name FROM grc__Risk__c ORDER BY Name ASC LIMIT 50`
+          `SELECT Id, Name, grc__Description__c, grc__Category__c, grc__Subcategory__c, grc__Business_Unit__c, grc__Business_Unit__r.Name FROM grc__Risk__c ORDER BY Name ASC LIMIT 100`
         );
         return records.map(r => ({
           sysId: r.Id,
           name: r.Name,
-          description: '',
-          profileSysId: '',
-          profileName: r.Name
+          description: r.grc__Description__c || (r.grc__Category__c ? `Category: ${r.grc__Category__c}` : ''),
+          profileSysId: r.grc__Business_Unit__c || '',
+          profileName: r.grc__Business_Unit__r?.Name || 'General'
         }));
       } catch (e: any) {
         console.warn(`[SalesforceAdapter] Live getAllRisks failed: ${e.message}. Using mock.`);
@@ -346,25 +346,29 @@ export class SalesforceAdapter extends BaseGRCAdapter {
         if (agent === 'inherent-assessment') {
           // Load Risk records from grc__Risk__c (the actual Risk object in this org)
           const records = await this.querySOQL<any>(
-            `SELECT Id, Name FROM grc__Risk__c ORDER BY Name ASC LIMIT 50`
+            `SELECT Id, Name, grc__Business_Unit__r.Name FROM grc__Risk__c ORDER BY Name ASC LIMIT 100`
           );
           return records.map(r => ({
             sysId: r.Id,
             riskSysId: r.Id,
-            riskName: r.Name,
+            riskName: r.grc__Business_Unit__r?.Name ? `${r.Name} (${r.grc__Business_Unit__r.Name})` : r.Name,
             state: 'Create New Assessment'
           }));
         }
 
         const records = await this.querySOQL<any>(
-          `SELECT Id, Name, Risk__Risk__c, Risk__Risk__r.Name FROM Risk__Risk_Assessment__c ORDER BY Name DESC LIMIT 50`
+          `SELECT Id, Name, Risk__Risk__c, Risk__Risk__r.Name, Risk__Risk__r.grc__Business_Unit__r.Name FROM Risk__Risk_Assessment__c ORDER BY Name DESC LIMIT 100`
         );
-        return records.map(r => ({
-          sysId: r.Id,
-          riskSysId: r.Risk__Risk__c || '',
-          riskName: r.Risk__Risk__r?.Name || 'Risk Assessment',
-          state: r.Name  // e.g. RA-00445
-        }));
+        return records.map(r => {
+          const buName = r.Risk__Risk__r?.grc__Business_Unit__r?.Name;
+          const baseName = r.Risk__Risk__r?.Name || 'Risk Assessment';
+          return {
+            sysId: r.Id,
+            riskSysId: r.Risk__Risk__c || '',
+            riskName: buName ? `${baseName} (${buName})` : baseName,
+            state: r.Name  // e.g. RA-00445
+          };
+        });
       } catch (e: any) {
         console.warn(`[SalesforceAdapter] Live getAllAssessmentInstances failed: ${e.message}. Using mock.`);
       }
@@ -394,16 +398,16 @@ export class SalesforceAdapter extends BaseGRCAdapter {
     if (this.useLive) {
       try {
         const records = await this.querySOQL<any>(
-          `SELECT Id, Name FROM grc__Risk__c WHERE Id = '${riskSysId}' LIMIT 1`
+          `SELECT Id, Name, grc__Description__c, grc__Category__c, grc__Subcategory__c, grc__Business_Unit__c, grc__Business_Unit__r.Name FROM grc__Risk__c WHERE Id = '${riskSysId}' LIMIT 1`
         );
         if (records.length > 0) {
           const r = records[0];
           return {
             sysId: r.Id,
             name: r.Name,
-            description: '',
-            profileSysId: '',
-            profileName: r.Name
+            description: r.grc__Description__c || (r.grc__Category__c ? `Category: ${r.grc__Category__c}` : ''),
+            profileSysId: r.grc__Business_Unit__c || '',
+            profileName: r.grc__Business_Unit__r?.Name || 'General'
           };
         }
         return null;
@@ -429,18 +433,18 @@ export class SalesforceAdapter extends BaseGRCAdapter {
     if (this.useLive) {
       try {
         let records: any[] = [];
-        // 1. Try to query controls belonging to this specific Business Unit
-        if (profileSysId && profileSysId.length > 10) {
+        // 1. If a specific Business Unit is specified, query controls strictly belonging to that Business Unit
+        if (profileSysId && profileSysId.trim().length > 0) {
           records = await this.querySOQL<any>(
-            `SELECT Id, Name, grc__Description__c, grc__Business_Unit__c, grc__Status__c, grc__Category__c FROM grc__Control__c WHERE grc__Business_Unit__c = '${profileSysId}' AND grc__Status__c IN ('Implemented', 'Not Implemented') LIMIT 50`
+            `SELECT Id, Name, grc__Description__c, grc__Business_Unit__c, grc__Business_Unit__r.Name, grc__Status__c, grc__Category__c FROM grc__Control__c WHERE grc__Business_Unit__c = '${profileSysId.trim()}' AND (grc__Status__c = null OR grc__Status__c IN ('Implemented', 'Not Implemented')) ORDER BY Name LIMIT 100`
           );
-        }
-        
-        // 2. If no controls found for that BU (or no BU specified), fetch general controls catalog
-        if (records.length === 0) {
+          console.log(`[SalesforceAdapter] Fetched ${records.length} controls for Business Unit: ${profileSysId.trim()}`);
+        } else {
+          // 2. Only if no Business Unit is specified at all, fetch general controls
           records = await this.querySOQL<any>(
-            `SELECT Id, Name, grc__Description__c, grc__Business_Unit__c, grc__Status__c, grc__Category__c FROM grc__Control__c WHERE grc__Status__c IN ('Implemented', 'Not Implemented') ORDER BY Name LIMIT 50`
+            `SELECT Id, Name, grc__Description__c, grc__Business_Unit__c, grc__Business_Unit__r.Name, grc__Status__c, grc__Category__c FROM grc__Control__c WHERE (grc__Status__c = null OR grc__Status__c IN ('Implemented', 'Not Implemented')) ORDER BY Name LIMIT 100`
           );
+          console.log(`[SalesforceAdapter] No Business Unit specified. Fetched ${records.length} general controls.`);
         }
 
         return records.map((c: any) => ({
@@ -449,6 +453,7 @@ export class SalesforceAdapter extends BaseGRCAdapter {
           description: c.grc__Description__c || '',
           category: c.grc__Category__c || 'General',
           profileSysId: c.grc__Business_Unit__c || '',
+          profileName: c.grc__Business_Unit__r?.Name || '',
           active: c.grc__Status__c === 'Implemented' || c.grc__Status__c === 'Not Implemented' || c.grc__Status__c == null
         }));
       } catch (e: any) {
@@ -948,6 +953,50 @@ export class SalesforceAdapter extends BaseGRCAdapter {
       sf_control_mappings.push({ Risk__c: riskSysId, Control__c: ctrl.sysId });
     });
     console.log(`[Salesforce DB UPDATE] Created ${matchedControls.length} entries in Risk_Control_Mapping__c. Added AI feedback summary to Risk__c: ${riskSysId}`);
+    return true;
+  }
+
+  // --------------------------------------------------------------------------
+  // getExistingRiskControlMappings — returns Set of control IDs already linked to risk
+  // --------------------------------------------------------------------------
+  async getExistingRiskControlMappings(riskSysId: string): Promise<Set<string> | null> {
+    if (this.useLive) {
+      try {
+        const records = await this.querySOQL<any>(
+          `SELECT Risk__Control__c FROM Risk__Risk_Control_Lookup__c WHERE Risk__Risk__c = '${riskSysId}'`
+        );
+        const mapped = new Set<string>();
+        for (const r of records) {
+          if (r.Risk__Control__c) mapped.add(r.Risk__Control__c);
+        }
+        console.log(`[SalesforceAdapter] Found ${mapped.size} existing mapped control(s) for risk ${riskSysId}`);
+        return mapped;
+      } catch (e: any) {
+        console.warn(`[SalesforceAdapter] Failed to query existing mappings for risk ${riskSysId}: ${e.message}`);
+        return null;
+      }
+    }
+    const mapped = new Set<string>();
+    sf_control_mappings.filter(m => m.Risk__c === riskSysId).forEach(m => mapped.add(m.Control__c));
+    return mapped;
+  }
+
+  // --------------------------------------------------------------------------
+  // writeRiskMappingSummary — writes mapping summary to grc__Risk__c.ai_recommendation__c
+  // --------------------------------------------------------------------------
+  async writeRiskMappingSummary(riskSysId: string, narrative: string): Promise<boolean> {
+    if (this.useLive) {
+      try {
+        await this.restUpdate('grc__Risk__c', riskSysId, {
+          ai_recommendation__c: (narrative || '').substring(0, 32768)
+        });
+        console.log(`[Salesforce LIVE UPDATE] writeRiskMappingSummary updated grc__Risk__c ${riskSysId}.ai_recommendation__c`);
+        return true;
+      } catch (e: any) {
+        console.warn(`[SalesforceAdapter] writeRiskMappingSummary failed: ${e.message}`);
+        return false;
+      }
+    }
     return true;
   }
 

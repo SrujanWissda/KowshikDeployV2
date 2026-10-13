@@ -285,14 +285,15 @@ app.post('/api/run-agent', async (req, res) => {
   // ✅ ISOLATION: Select adapter for THIS instance only
   let adapter: any;
   try {
-    if (platform === 'servicenow') {
+    const normPlatform = (platform || '').toLowerCase().trim();
+    if (normPlatform === 'servicenow') {
       // ✅ Use instanceRegistry — centralized validation + cached adapters
       //    (this also guarantees isolation: each instanceId gets its own connection)
       adapter = instanceRegistry.getAdapter(instanceId);
       console.log(`[ISOLATION] Using registered ServiceNow adapter for instance '${instanceId}'`);
-    } else if (platform === 'salesforce') {
-      // TODO: Extend SalesforceAdapter to support multiple instances
-      adapter = salesforceAdapter;
+    } else if (normPlatform === 'salesforce' || normPlatform.includes('salesforce')) {
+      // Direct Salesforce adapter (or dynamic adapter if specifically registered)
+      adapter = dynamicAdapters.get(platform) || salesforceAdapter;
     } else {
       adapter = dynamicAdapters.get(platform);
     }
